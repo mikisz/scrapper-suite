@@ -120,8 +120,24 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 };
             }
 
+            let childNodesArray = Array.from(node.childNodes);
+
+            // 1. Shadow DOM Support
+            // If the element has a shadow root, we MUST traverse that instead of the light DOM children
+            // because the shadow root is what is actually rendered.
+            if (el.shadowRoot) {
+                childNodesArray = Array.from(el.shadowRoot.childNodes);
+            }
+
+            // 2. Slot Support
+            // If we are currently at a <slot> element (inside a shadow root), 
+            // its visual children are the "assigned nodes" from the light DOM.
+            if (el.tagName === 'SLOT') {
+                childNodesArray = el.assignedNodes ? el.assignedNodes({ flatten: true }) : [];
+            }
+
             const children = [];
-            node.childNodes.forEach(child => {
+            childNodesArray.forEach(child => {
                 const result = analyzeNode(child);
                 if (result) children.push(result);
             });
