@@ -1,0 +1,16 @@
+{
+    "name": "website-to-figma-plugin",
+    "version": "1.0.0",
+    "description": "Figma plugin to import websites from scraping service",
+    "scripts": {
+        "build": "vite build -c vite.ui.config.ts && vite build -c vite.code.config.ts",
+        "watch": "vite build -c vite.ui.config.ts --watch & vite build -c vite.code.config.ts --watch"
+    },
+    "dependencies": {},
+    "devDependencies": {
+        "@figma/plugin-typings": "^1.84.0",
+        "typescript": "^5.3.3",
+        "vite": "^5.0.10",
+        "vite-plugin-singlefile": "^0.13.5"
+    }
+}

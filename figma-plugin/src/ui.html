@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: Inter, sans-serif; padding: 20px; }
+    input { width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+    button { background: #000; color: #fff; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%; }
+    button:disabled { background: #ccc; }
+    .error { color: red; margin-top: 10px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h3>Website to Figma</h3>
+  <label>Scraper API URL</label>
+  <input id="apiUrl" type="text" value="http://localhost:3000/api/website-to-figma" />
+  
+  <label>Target Website URL</label>
+  <input id="targetUrl" type="text" placeholder="https://example.com" />
+  
+  <button id="importBtn">Import to Figma</button>
+  <div id="status"></div>
+
+  <script>
+    const importBtn = document.getElementById('importBtn');
+    const statusDiv = document.getElementById('status');
+    const apiUrlInput = document.getElementById('apiUrl');
+    const targetUrlInput = document.getElementById('targetUrl');
+
+    importBtn.onclick = async () => {
+      const apiUrl = apiUrlInput.value;
+      const targetUrl = targetUrlInput.value;
+
+      if (!targetUrl) {
+        statusDiv.textContent = 'Please enter a target URL';
+        return;
+      }
+
+      importBtn.disabled = true;
+      statusDiv.textContent = 'Scraping... (this may take a few seconds)';
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: targetUrl })
+        });
+
+        if (!response.ok) {
+          throw new Error('Scraper failed: ' + response.statusText);
+        }
+
+        const json = await response.json();
+        
+        statusDiv.textContent = 'Building in Figma...';
+        parent.postMessage({ pluginMessage: { type: 'build', data: json.data } }, '*');
+
+      } catch (err) {
+        statusDiv.textContent = 'Error: ' + err.message;
+        statusDiv.className = 'error';
+        importBtn.disabled = false;
+      }
+    };
+
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (msg && msg.type === 'done') {
+        statusDiv.textContent = 'Done!';
+        importBtn.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>
