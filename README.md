@@ -35,13 +35,13 @@ npm run dev
 ### 2. Load the Figma Plugin
 1. Open Figma Desktop App.
 2. Go to **Plugins > Development > Import plugin from manifest...**
-3. Select `figma-plugin/manifest.json`.
+3. Select `clients/figma-plugin/manifest.json`.
 4. Run it in any design file.
 
 ### 3. (Optional) Load the Chrome Extension
 1. Open Chrome `chrome://extensions`.
 2. Enable **Developer Mode**.
-3. **Load Unpacked** -> Select `chrome-extension/` folder.
+3. **Load Unpacked** -> Select `clients/chrome-extension/` folder.
 4. Click the extension icon on any page to "Scan" it.
 
 ## 📚 Documentation
