@@ -68,9 +68,12 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
             const computed = window.getComputedStyle(el);
             const rect = el.getBoundingClientRect();
 
-            // Skip tiny elements... UNLESS they are images!
+            // Skip tiny elements... UNLESS they are images, have Shadow DOM, or display:contents
             const isImage = el.tagName === 'IMG';
-            if (!isImage && (rect.width === 0 || rect.height === 0)) return null;
+            const hasShadow = !!el.shadowRoot;
+            const isDisplayContents = computed.display === 'contents';
+
+            if (!isImage && !hasShadow && !isDisplayContents && (rect.width === 0 || rect.height === 0)) return null;
 
             const styles = {
                 width: rect.width,
