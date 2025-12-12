@@ -26,6 +26,9 @@ RUN npm run build
 # Expose port
 EXPOSE 3000
 
+# Fix permissions for pptruser
+RUN chown -R pptruser:pptruser /app
+
 # Switch back to the non-privileged pptruser provided by the base image
 USER pptruser
 
