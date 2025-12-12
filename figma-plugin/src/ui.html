@@ -46,6 +46,12 @@
   <label>Target Website URL</label>
   <input id="targetUrl" type="text" placeholder="https://example.com" />
 
+  <div style="text-align: center; margin: 10px 0; color: #666;">- OR -</div>
+
+  <label>Paste JSON from Extension</label>
+  <textarea id="jsonInput" placeholder='{"url": "...", "data": {...}}'
+    style="width: 100%; height: 60px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; font-family: monospace; font-size: 11px;"></textarea>
+
   <button id="importBtn">Import to Figma</button>
   <div id="status"></div>
 
@@ -54,13 +60,42 @@
     const statusDiv = document.getElementById('status');
     const apiUrlInput = document.getElementById('apiUrl');
     const targetUrlInput = document.getElementById('targetUrl');
+    const jsonInput = document.getElementById('jsonInput');
 
     importBtn.onclick = async () => {
+      const jsonText = jsonInput.value.trim();
+
+      // MODE 1: JSON Import (Extension)
+      if (jsonText) {
+        importBtn.disabled = true;
+        statusDiv.textContent = 'Parsing JSON...';
+        statusDiv.className = '';
+
+        try {
+          const parsed = JSON.parse(jsonText);
+          // Extension outputs: { url: "...", data: {...} }
+          // API outputs: { message: "...", data: {...} }
+          // We need to extract 'data'.
+          const dataToBuild = parsed.data || parsed;
+
+          if (!dataToBuild) throw new Error("Invalid JSON: Missing 'data' field");
+
+          statusDiv.textContent = 'Building from JSON...';
+          parent.postMessage({ pluginMessage: { type: 'build', data: dataToBuild } }, '*');
+        } catch (err) {
+          statusDiv.textContent = 'JSON Error: ' + err.message;
+          statusDiv.className = 'error';
+          importBtn.disabled = false;
+        }
+        return;
+      }
+
+      // MODE 2: URL Import (Scraper API)
       const apiUrl = apiUrlInput.value.replace(/\/$/, ''); // simple trim slash
       const targetUrl = targetUrlInput.value;
 
       if (!targetUrl) {
-        statusDiv.textContent = 'Please enter a target URL';
+        statusDiv.textContent = 'Please enter a URL or paste JSON';
         return;
       }
 
