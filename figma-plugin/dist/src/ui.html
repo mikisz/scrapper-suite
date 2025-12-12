@@ -134,6 +134,28 @@
         statusDiv.textContent = 'Done!';
         importBtn.disabled = false;
       }
+
+      // Handle Image Fetch Request from Plugin Code
+      if (msg && msg.type === 'fetch-image') {
+        const url = msg.url;
+        const id = msg.id;
+
+        fetch(url)
+          .then(response => {
+            if (!response.ok) throw new Error('Network response was not ok');
+            return response.arrayBuffer();
+          })
+          .then(buffer => {
+            const uint8Array = new Uint8Array(buffer);
+            // Post back to plugin
+            parent.postMessage({ pluginMessage: { type: 'image-data', id, data: uint8Array } }, '*');
+          })
+          .catch(err => {
+            console.error('Failed to fetch image:', url, err);
+            // Post back failure so plugin doesn't hang
+            parent.postMessage({ pluginMessage: { type: 'image-data', id, error: true } }, '*');
+          });
+      }
     };
   </script>
 </body>
