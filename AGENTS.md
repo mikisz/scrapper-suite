@@ -1,39 +1,123 @@
 # Context for AI Agents
 
-**Current Status**: Phase 2 Complete (Chrome Extension Boilerplate & Shared Logic)
-**Project Goal**: Create a robust "Website to Figma" workflow using both server-side scraping and client-side extension scanning.
+**Current Status**: Complete Suite (Figma Plugin + Chrome Extension + LLM Tool + Image Proxy)
+**Project Goal**: Maintain a robust scraping suite for designers and AI.
+
+---
+
+## Multi-Model Coordination
+
+This repository uses **Git worktrees** for parallel AI development. Multiple models can work simultaneously on different features.
+
+### Active Worktrees
+| Worktree | Branch | Purpose | Suggested Model |
+|----------|--------|---------|-----------------|
+| `opus/` | `dev/opus-main` | Complex features, architecture | Claude Opus |
+| `sonnet/` | `dev/sonnet-main` | Implementation, tests | Claude Sonnet |
+| `gemini/` | `dev/gemini-main` | Experiments, alternatives | Gemini |
+
+### Before You Start
+1. **Check your worktree**: Look at the folder path to know which model role you're in
+2. **Fetch latest**: `git fetch origin` to see other models' work
+3. **Avoid duplicating work**: Check commits on other branches first
+4. **Use commit prefixes**: `[opus]`, `[sonnet]`, `[gemini]` etc.
+
+### Commit Message Format
+```
+[model] type: description
+
+Examples:
+[opus] feat: add gradient angle parsing
+[sonnet] test: add serializer unit tests
+[gemini] refactor: improve image loading
+```
+
+### Coordination Rules
+- **Don't edit the same file** as another active worktree (check first)
+- **Pull from main** frequently to reduce conflicts
+- **Document decisions** in commit messages for other models to read
+
+---
 
 ## Key Files & Structure
+
 *   **`scrapper-suite/`**: Next.js app. The "Brain" and API server.
     *   `app/api/website-to-figma/route.ts`: Main API endpoint for public URLs.
-    *   `app/lib/dom-serializer.js`: **CRITICAL**. This file is the shared logic for DOM parsing. It is injected into Puppeteer AND copied to the Chrome Extension.
-    *   *Note: If you modify `dom-serializer.js`, ensure it is synced to `chrome-extension/lib/`.*
+    *   `app/api/web-to-llm/route.ts`: API for converting sites to Markdown.
+    *   `app/lib/dom-serializer.js`: **CRITICAL**. Shared logic. Injected into Puppeteer AND copied to Extension.
+    *   *Note: Sync changes from here to `clients/chrome-extension/lib/`.*
 
-*   **`figma-plugin/`**: Logic for reconstructing the UI.
-    *   `src/code.ts`: Main thread. Handles `createFrame`, `loadFonts`, etc.
-    *   `src/ui.html`: The UI window. Fetches data or (in Phase 3) will accept pasted JSON.
+*   **`clients/figma-plugin/`**: Website-to-Figma Plugin.
+    *   `src/code.ts`: Main thread. Handles rendering (Shadows, Borders, Gradients).
+    *   `src/ui.html`: Dark Mode UI with Image Proxy logic.
 
-*   **`chrome-extension/`**: User-side scraper.
+*   **`clients/chrome-extension/`**: Client-side Scraper.
     *   `manifest.json`: V3 Manifest.
     *   `popup.js`: Injects the serializer.
 
+---
+
 ## Conventions
-*   **Visual Tree JSON**: The output of `dom-serializer.js`. It's a recursive object with `type: 'FRAME' | 'TEXT' | 'TEXT_NODE'`, `styles` object, and `children` array.
-*   **Styling**: We extract computed styles (`getComputedStyle`). We try to map Flexbox to Figma AutoLayout (`layoutMode`).
-*   **Docker**: The backend runs in Docker. We optimized it to skip Chrome download (`PUPPETEER_SKIP_CHROMIUM_DOWNLOAD`).
+
+*   **Visual Tree JSON**: Output of `dom-serializer.js`.
+*   **Fidelity**: We capture computed styles including `box-shadow`, `border`, `linear-gradient`.
+*   **Proxy**: Images are fetched via `/api/proxy-image` to bypass CORS.
+
+---
 
 ## Current Roadmap (checked = done)
-- [x] **Phase 1**: Raw Import & Basic Scraper (Puppeteer + Figma Plugin).
-- [x] **DevOps**: Fix Docker build, optimize dependencies.
-- [x] **Phase 2 (Extension)**:
-    - [x] Shared `dom-serializer.js` library.
-    - [x] Chrome Extension Boilerplate (Manifest V3, Popup).
-    - [ ] **Phase 3 (Integration)**: Connect Extension output to Figma Plugin (e.g., via clipboard or local server).
-- [ ] **Future**:
-    - [ ] AI Component Mapping (Match raw frames to Design System components).
-    - [ ] Design Token extraction (Variables).
+
+- [x] **Phase 1**: Raw Import & Basic Scraper.
+- [x] **Phase 2-3**: Extension & Integration.
+- [x] **Phase 4-5**: High Fidelity (Shadows, Gradients, SVGs).
+- [x] **Phase 6**: Plugin Experience (Proxy, Dark Mode).
+- [x] **Phase 7**: Web-to-LLM (Metadata, Markdown).
+- [x] **Phase 8**: Repo Reorganization.
+- [ ] **Phase 9**: Testing & Quality (see `docs/CODEBASE_ANALYSIS.md`)
+- [ ] **Phase 10**: Visual Fidelity Improvements
+
+---
+
+## Task Assignment by Model
+
+Based on capabilities, here are suggested task assignments:
+
+### For Opus (Complex/Architecture)
+- Gradient angle parsing
+- Font matching system
+- AI component detection
+- Design token extraction
+
+### For Sonnet (Implementation/Tests)
+- Add test suite for dom-serializer
+- Fix TypeScript issues (require → import)
+- Add progress indicators to plugin
+- Improve error messages
+
+### For Gemini (Experiments/Alternatives)
+- Parallel image loading
+- Chrome Extension v2
+- Alternative scraping approaches
+- Performance optimization
+
+---
 
 ## Verified Workflows
-*   **Build**: `docker build .` works.
-*   **Figma Connectivity**: Plugin has a health check dot (Green = API up, Red = API down).
-*   **Extension**: Can scan page and output JSON to clipboard.
+
+*   **Build**: `cd scrapper-suite && npm run dev`.
+*   **Plugin**: `cd clients/figma-plugin && npm run build`.
+*   **Extension**: Load `clients/chrome-extension`.
+
+---
+
+## Quick Reference
+
+| Task | Location |
+|------|----------|
+| Main API | `scrapper-suite/app/api/website-to-figma/route.ts` |
+| DOM Serializer | `scrapper-suite/app/lib/dom-serializer.js` |
+| Plugin Logic | `clients/figma-plugin/src/code.ts` |
+| Plugin UI | `clients/figma-plugin/src/ui.html` |
+| Extension | `clients/chrome-extension/popup.js` |
+| Analysis | `docs/CODEBASE_ANALYSIS.md` |
+| Workflow Guide | `docs/MULTI_MODEL_WORKFLOW.md` |
