@@ -36,6 +36,20 @@ export default function Home() {
             <h2 className="text-2xl font-semibold">Website to PNG</h2>
             <p className="text-white/60">Convert page to image.</p>
           </Link>
+
+          <Link href="/web-to-llm" className="glass-panel p-8 text-center transition-all hover:-translate-y-2 hover:bg-white/10 group flex flex-col items-center gap-4">
+            <div className="w-16 h-16 bg-white/10 rounded-full flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+            </div>
+            <h2 className="text-2xl font-semibold">Web to LLM</h2>
+            <p className="text-white/60">Scrape to Markdown.</p>
+          </Link>
         </main>
       </div>
     </div>
