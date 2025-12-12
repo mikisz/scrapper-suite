@@ -120,7 +120,7 @@ export async function POST(request: Request) {
                 document = cleanDom.window.document;
                 // Prepend title
                 const title = document.createElement('h1');
-                title.textContent = article.title;
+                title.textContent = article.title || 'Untitled';
                 document.body.prepend(title);
             }
         }
