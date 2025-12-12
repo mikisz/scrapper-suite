@@ -1,22 +1,3 @@
-var __defProp = Object.defineProperty;
-var __defProps = Object.defineProperties;
-var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
-var __getOwnPropSymbols = Object.getOwnPropertySymbols;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __propIsEnum = Object.prototype.propertyIsEnumerable;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-var __spreadValues = (a, b) => {
-  for (var prop in b || (b = {}))
-    if (__hasOwnProp.call(b, prop))
-      __defNormalProp(a, prop, b[prop]);
-  if (__getOwnPropSymbols)
-    for (var prop of __getOwnPropSymbols(b)) {
-      if (__propIsEnum.call(b, prop))
-        __defNormalProp(a, prop, b[prop]);
-    }
-  return a;
-};
-var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
 var __async = (__this, __arguments, generator) => {
   return new Promise((resolve, reject) => {
     var fulfilled = (value) => {
@@ -78,6 +59,11 @@ var __async = (__this, __arguments, generator) => {
     const styles = node.styles || {};
     if (styles.backgroundImage && styles.backgroundImage.type === "IMAGE" && styles.backgroundImage.url) {
       urls.add(styles.backgroundImage.url);
+    }
+    if (node.type === "PSEUDO_ELEMENT" && node.contentType === "IMAGE") {
+      if (styles.backgroundImage && styles.backgroundImage.url) {
+        urls.add(styles.backgroundImage.url);
+      }
     }
     if (node.children) {
       for (const child of node.children) {
@@ -195,6 +181,11 @@ var __async = (__this, __arguments, generator) => {
       const weight = styles.fontWeight || "400";
       fonts.add(`${family}:${weight}`);
     }
+    if (node.type === "PSEUDO_ELEMENT" && node.contentType === "TEXT" && styles.fontFamily) {
+      const family = parseFontFamily(styles.fontFamily);
+      const weight = styles.fontWeight || "400";
+      fonts.add(`${family}:${weight}`);
+    }
     if (node.children) {
       for (const child of node.children) {
         extractFonts(child, fonts);
@@ -298,59 +289,126 @@ var __async = (__this, __arguments, generator) => {
       [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
     ];
   }
-  function parseGradient(gradientStr) {
-    if (!gradientStr || !gradientStr.includes("linear-gradient")) return null;
+  function parseColorString(colorStr) {
+    var _a, _b, _c;
+    let r = 0, g = 0, b = 0, a = 1;
+    if (colorStr.startsWith("rgba")) {
+      const nums = (_a = colorStr.match(/[\d.]+/g)) == null ? void 0 : _a.map(Number);
+      if (nums && nums.length >= 3) {
+        r = nums[0] / 255;
+        g = nums[1] / 255;
+        b = nums[2] / 255;
+        a = (_b = nums[3]) != null ? _b : 1;
+      }
+    } else if (colorStr.startsWith("rgb")) {
+      const nums = (_c = colorStr.match(/[\d.]+/g)) == null ? void 0 : _c.map(Number);
+      if (nums && nums.length >= 3) {
+        r = nums[0] / 255;
+        g = nums[1] / 255;
+        b = nums[2] / 255;
+      }
+    } else if (colorStr.startsWith("#")) {
+      const hex = colorStr.slice(1);
+      if (hex.length === 3) {
+        r = parseInt(hex[0] + hex[0], 16) / 255;
+        g = parseInt(hex[1] + hex[1], 16) / 255;
+        b = parseInt(hex[2] + hex[2], 16) / 255;
+      } else if (hex.length >= 6) {
+        r = parseInt(hex.slice(0, 2), 16) / 255;
+        g = parseInt(hex.slice(2, 4), 16) / 255;
+        b = parseInt(hex.slice(4, 6), 16) / 255;
+        if (hex.length === 8) a = parseInt(hex.slice(6, 8), 16) / 255;
+      }
+    } else {
+      return null;
+    }
+    return { r, g, b, a };
+  }
+  function extractGradientStops(gradientStr) {
+    const colorStopRegex = /(rgba?\([^)]+\)|#[a-fA-F0-9]{3,8})(?:\s+(\d+(?:\.\d+)?%?))?/g;
+    let match;
+    const rawStops = [];
+    while ((match = colorStopRegex.exec(gradientStr)) !== null) {
+      const color = parseColorString(match[1]);
+      if (!color) continue;
+      rawStops.push({ color, position: match[2] ? parseFloat(match[2]) / 100 : void 0 });
+    }
+    if (rawStops.length < 2) return [];
+    for (let i = 0; i < rawStops.length; i++) {
+      if (rawStops[i].position === void 0) {
+        if (i === 0) rawStops[i].position = 0;
+        else if (i === rawStops.length - 1) rawStops[i].position = 1;
+        else {
+          const prevIdx = i - 1;
+          let nextIdx = i + 1;
+          while (nextIdx < rawStops.length && rawStops[nextIdx].position === void 0) nextIdx++;
+          const prevPos = rawStops[prevIdx].position || 0;
+          const nextPos = rawStops[nextIdx].position || 1;
+          rawStops[i].position = prevPos + (nextPos - prevPos) * ((i - prevIdx) / (nextIdx - prevIdx));
+        }
+      }
+    }
+    return rawStops.map((s) => ({ position: s.position || 0, color: s.color }));
+  }
+  function parseRadialGradientPosition(gradientStr) {
+    let x = 0.5, y = 0.5;
+    const atMatch = gradientStr.match(/at\s+([^,)]+)/i);
+    if (atMatch) {
+      const parts = atMatch[1].trim().split(/\s+/);
+      const parsePos = (val) => {
+        if (val === "center") return 0.5;
+        if (val === "left" || val === "top") return 0;
+        if (val === "right" || val === "bottom") return 1;
+        if (val.endsWith("%")) return parseFloat(val) / 100;
+        return 0.5;
+      };
+      if (parts.length >= 2) {
+        x = parsePos(parts[0]);
+        y = parsePos(parts[1]);
+      } else if (parts.length === 1) {
+        const val = parts[0];
+        if (val === "left") {
+          x = 0;
+        } else if (val === "right") {
+          x = 1;
+        } else if (val === "top") {
+          y = 0;
+        } else if (val === "bottom") {
+          y = 1;
+        } else {
+          x = parsePos(val);
+        }
+      }
+    }
+    return { x, y };
+  }
+  function parseRadialGradient(gradientStr) {
+    if (!(gradientStr == null ? void 0 : gradientStr.includes("radial-gradient"))) return null;
+    const { x, y } = parseRadialGradientPosition(gradientStr);
+    const scaleX = gradientStr.includes("closest-side") ? 0.5 : 1;
+    const scaleY = scaleX;
+    const transform = [[scaleX, 0, x - scaleX / 2], [0, scaleY, y - scaleY / 2]];
+    const stops = extractGradientStops(gradientStr);
+    if (stops.length < 2) return null;
+    return { type: "GRADIENT_RADIAL", gradientStops: stops, gradientTransform: transform };
+  }
+  function parseLinearGradient(gradientStr) {
+    if (!(gradientStr == null ? void 0 : gradientStr.includes("linear-gradient"))) return null;
     const angle = parseGradientAngle(gradientStr);
     const transform = angleToGradientTransform(angle);
-    const colors = [];
-    const colorMatches = gradientStr.match(/rgba?\(.*?\)|#[a-fA-F0-9]{3,8}/g);
-    if (colorMatches && colorMatches.length >= 2) {
-      colorMatches.forEach((c) => {
-        var _a, _b;
-        let r = 0, g = 0, b = 0;
-        if (c.startsWith("rgba")) {
-          const nums = (_a = c.match(/[\d.]+/g)) == null ? void 0 : _a.map(Number);
-          if (nums && nums.length >= 3) {
-            r = nums[0] / 255;
-            g = nums[1] / 255;
-            b = nums[2] / 255;
-          }
-        } else if (c.startsWith("rgb")) {
-          const nums = (_b = c.match(/[\d.]+/g)) == null ? void 0 : _b.map(Number);
-          if (nums && nums.length >= 3) {
-            r = nums[0] / 255;
-            g = nums[1] / 255;
-            b = nums[2] / 255;
-          }
-        } else if (c.startsWith("#")) {
-          const hex = c.slice(1);
-          if (hex.length === 3) {
-            r = parseInt(hex[0] + hex[0], 16) / 255;
-            g = parseInt(hex[1] + hex[1], 16) / 255;
-            b = parseInt(hex[2] + hex[2], 16) / 255;
-          } else if (hex.length >= 6) {
-            r = parseInt(hex.slice(0, 2), 16) / 255;
-            g = parseInt(hex.slice(2, 4), 16) / 255;
-            b = parseInt(hex.slice(4, 6), 16) / 255;
-          }
-        }
-        colors.push({ r, g, b });
-      });
-    }
-    if (colors.length < 2) return null;
-    const stops = colors.map((c, i) => ({
-      position: i / (colors.length - 1),
-      color: __spreadProps(__spreadValues({}, c), { a: 1 })
-    }));
-    return {
-      type: "GRADIENT_LINEAR",
-      gradientStops: stops,
-      gradientTransform: transform
-    };
+    const stops = extractGradientStops(gradientStr);
+    if (stops.length < 2) return null;
+    return { type: "GRADIENT_LINEAR", gradientStops: stops, gradientTransform: transform };
+  }
+  function parseGradient(gradientStr) {
+    if (!gradientStr) return null;
+    if (gradientStr.includes("radial-gradient")) return parseRadialGradient(gradientStr);
+    if (gradientStr.includes("linear-gradient")) return parseLinearGradient(gradientStr);
+    return null;
   }
   function buildNode(data, parent, parentData) {
     return __async(this, null, function* () {
-      var _a, _b, _c, _d;
+      var _a, _b, _c, _d, _e, _f, _g, _h;
       if (!data) return;
       processedNodes++;
       if (processedNodes % 10 === 0 || processedNodes === totalNodes) {
@@ -359,7 +417,25 @@ var __async = (__this, __arguments, generator) => {
       }
       let node;
       const s = data.styles || {};
-      if (data.type === "IMAGE") {
+      if (data.type === "VECTOR") {
+        try {
+          const svgNode = figma.createNodeFromSvg(data.svgString);
+          svgNode.name = "SVG";
+          node = svgNode;
+          if (s.width && s.height && s.width > 0 && s.height > 0) {
+            svgNode.resize(s.width, s.height);
+          }
+          if (s.boxShadow) {
+            svgNode.effects = parseBoxShadow(s.boxShadow);
+          }
+        } catch (e) {
+          console.warn("Failed to parse SVG, creating placeholder:", e);
+          const rect = figma.createRectangle();
+          rect.name = "SVG (failed to parse)";
+          rect.fills = [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9 } }];
+          node = rect;
+        }
+      } else if (data.type === "IMAGE") {
         const rect = figma.createRectangle();
         rect.name = "Image";
         node = rect;
@@ -372,6 +448,58 @@ var __async = (__this, __arguments, generator) => {
         }
         if (s.boxShadow) {
           node.effects = parseBoxShadow(s.boxShadow);
+        }
+      } else if (data.type === "PSEUDO_ELEMENT") {
+        const pseudoName = data.pseudo === "::before" ? "Before" : "After";
+        if (data.contentType === "TEXT" && data.content) {
+          const text = figma.createText();
+          node = text;
+          text.name = `::${pseudoName.toLowerCase()}`;
+          const fontFamily = parseFontFamily(s.fontFamily);
+          const fontWeight = s.fontWeight || "400";
+          const loadedFont = yield tryLoadFont(fontFamily, fontWeight);
+          text.fontName = loadedFont;
+          text.characters = data.content;
+          if (s.fontSize) text.fontSize = s.fontSize;
+          if (s.color) {
+            text.fills = [{ type: "SOLID", color: s.color }];
+          }
+          if (s.boxShadow) {
+            text.effects = parseBoxShadow(s.boxShadow);
+          }
+        } else {
+          const frame = figma.createFrame();
+          frame.name = `::${pseudoName.toLowerCase()}`;
+          node = frame;
+          const fills = [];
+          if (s.backgroundColor) {
+            fills.push({ type: "SOLID", color: s.backgroundColor, opacity: s.opacity });
+          }
+          if (s.backgroundImage && s.backgroundImage.type === "IMAGE") {
+            const bgBytes = imageCache.get(s.backgroundImage.url);
+            if (bgBytes) {
+              const bgHash = figma.createImage(bgBytes).hash;
+              fills.push({ type: "IMAGE", scaleMode: "FILL", imageHash: bgHash });
+            }
+          } else if (s.backgroundImage && s.backgroundImage.type === "GRADIENT") {
+            const gradient = parseGradient(s.backgroundImage.raw);
+            if (gradient) fills.push(gradient);
+          }
+          frame.fills = fills.length > 0 ? fills : [];
+          if (s.borderRadius) {
+            frame.topLeftRadius = s.borderRadius.topLeft || 0;
+            frame.topRightRadius = s.borderRadius.topRight || 0;
+            frame.bottomRightRadius = s.borderRadius.bottomRight || 0;
+            frame.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
+          }
+          if (s.boxShadow) {
+            frame.effects = parseBoxShadow(s.boxShadow);
+          }
+          if (s.border && s.border.width > 0 && s.border.color) {
+            frame.strokes = [{ type: "SOLID", color: s.border.color }];
+            frame.strokeWeight = s.border.width;
+            frame.strokeAlign = "INSIDE";
+          }
         }
       } else if (data.type === "TEXT_NODE" || data.type === "TEXT" && data.content) {
         const text = figma.createText();
@@ -461,13 +589,62 @@ var __async = (__this, __arguments, generator) => {
       }
       if (data.type === "FRAME" && node.type === "FRAME") {
         const frame = node;
-        if (s.display === "flex") {
-          frame.layoutMode = s.flexDirection === "row" ? "HORIZONTAL" : "VERTICAL";
-          frame.itemSpacing = s.gap || 0;
+        const countGridColumns = (template) => {
+          if (!template || template === "none") return 1;
+          const repeatMatch = template.match(/repeat\(\s*(\d+)/);
+          if (repeatMatch) return parseInt(repeatMatch[1]) || 1;
+          return template.trim().split(/\s+/).filter((p) => p && p !== "none").length || 1;
+        };
+        if (s.display === "grid") {
+          const columns = countGridColumns(s.gridTemplateColumns);
+          if (columns > 1) {
+            frame.layoutMode = "HORIZONTAL";
+            frame.layoutWrap = "WRAP";
+          } else {
+            frame.layoutMode = "VERTICAL";
+          }
+          frame.itemSpacing = s.columnGap || s.gap || 0;
+          frame.counterAxisSpacing = s.rowGap || s.gap || 0;
           frame.paddingTop = ((_a = s.padding) == null ? void 0 : _a.top) || 0;
           frame.paddingRight = ((_b = s.padding) == null ? void 0 : _b.right) || 0;
           frame.paddingBottom = ((_c = s.padding) == null ? void 0 : _c.bottom) || 0;
           frame.paddingLeft = ((_d = s.padding) == null ? void 0 : _d.left) || 0;
+          switch (s.alignItems) {
+            case "center":
+              frame.counterAxisAlignItems = "CENTER";
+              break;
+            case "end":
+            case "flex-end":
+              frame.counterAxisAlignItems = "MAX";
+              break;
+            default:
+              frame.counterAxisAlignItems = "MIN";
+          }
+          switch (s.justifyContent) {
+            case "center":
+              frame.primaryAxisAlignItems = "CENTER";
+              break;
+            case "space-between":
+              frame.primaryAxisAlignItems = "SPACE_BETWEEN";
+              break;
+            case "end":
+            case "flex-end":
+              frame.primaryAxisAlignItems = "MAX";
+              break;
+            default:
+              frame.primaryAxisAlignItems = "MIN";
+          }
+        } else if (s.display === "flex") {
+          frame.layoutMode = s.flexDirection === "row" ? "HORIZONTAL" : "VERTICAL";
+          if (s.flexWrap === "wrap" || s.flexWrap === "wrap-reverse") {
+            frame.layoutWrap = "WRAP";
+            frame.counterAxisSpacing = s.rowGap || s.gap || 0;
+          }
+          frame.itemSpacing = s.columnGap || s.gap || 0;
+          frame.paddingTop = ((_e = s.padding) == null ? void 0 : _e.top) || 0;
+          frame.paddingRight = ((_f = s.padding) == null ? void 0 : _f.right) || 0;
+          frame.paddingBottom = ((_g = s.padding) == null ? void 0 : _g.bottom) || 0;
+          frame.paddingLeft = ((_h = s.padding) == null ? void 0 : _h.left) || 0;
           switch (s.alignItems) {
             case "center":
               frame.counterAxisAlignItems = "CENTER";

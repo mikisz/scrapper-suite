@@ -93,11 +93,14 @@ class BrowserPool {
 
         // Pool is full and all browsers are in use, wait for one to become available
         return new Promise((resolve, reject) => {
+            let checkInterval: NodeJS.Timeout;
+            
             const timeout = setTimeout(() => {
+                clearInterval(checkInterval); // Clear interval to prevent resource leak
                 reject(new Error('Timeout waiting for available browser'));
             }, POOL_CONFIG.launchTimeout);
 
-            const checkInterval = setInterval(() => {
+            checkInterval = setInterval(() => {
                 const available = this.pool.find(pb => !pb.inUse && pb.browser.connected);
                 if (available) {
                     clearInterval(checkInterval);
