@@ -126,34 +126,8 @@
       }
     };
 
-    // Health Check on Load
-    (async () => {
-      const statusDot = document.createElement('span');
-      statusDot.style.cssText = 'display:inline-block; width:8px; height:8px; border-radius:50%; background:#ccc; margin-right:5px;';
-      const h3 = document.querySelector('h3');
-      h3.prepend(statusDot);
 
-      const apiUrl = apiUrlInput.value.replace(/\/$/, '');
-      // Try a simple HEAD or GET to the base URL or API to check availability
-      // Since /api/website-to-figma is POST only, we might just try to fetch it and expect 405 Method Not Allowed (which means server IS there)
-      // or a dedicated health endpoint. For now, let's assume if we get a response (even 405), it's alive.
-      try {
-        const res = await fetch(apiUrl, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } });
-        // If we get here, valid DNS/IP. 
-        // If status is 500 or 404, it might be an issue, but 400 (missing body properties) means it's running.
-        if (res.status !== 503) {
-          statusDot.style.background = '#0f0'; // Green
-          statusDot.title = "Server Connected";
-        } else {
-          statusDot.style.background = '#f00'; // Red
-          statusDot.title = "Server Unavailable (503)";
-        }
-      } catch (e) {
-        statusDot.style.background = '#f00'; // Red
-        statusDot.title = "Server Unreachable";
-      }
-    })();
-
+    // Health Check removed as requested to support standalone usage
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
       if (msg && msg.type === 'done') {
