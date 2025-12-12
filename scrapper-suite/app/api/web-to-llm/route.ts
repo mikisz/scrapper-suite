@@ -13,24 +13,18 @@ import { URL } from 'url';
 
 puppeteer.use(StealthPlugin());
 
-function downloadImage(url: string, filepath: string) {
-    return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(filepath);
-        https.get(url, (response) => {
-            if (response.statusCode !== 200) {
-                file.close();
-                fs.unlink(filepath, () => { }); // delete empty file
-                return reject(new Error(`Status ${response.statusCode}`));
-            }
-            response.pipe(file);
-            file.on('finish', () => {
-                file.close(resolve);
-            });
-        }).on('error', (err) => {
-            fs.unlink(filepath, () => { });
-            reject(err);
+async function downloadImage(url: string, filepath: string) {
+    try {
+        const response = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ScrapperSuite/1.0)' }
         });
-    });
+        if (!response.ok) throw new Error(`Status ${response.status}`);
+
+        const buffer = await response.arrayBuffer();
+        await fs.writeFile(filepath, Buffer.from(buffer));
+    } catch (error) {
+        throw error;
+    }
 }
 
 async function zipDirectory(sourceDir: string, outPath: string) {
@@ -119,10 +113,24 @@ export async function POST(request: Request) {
                 // Create a new clean DOM from article content
                 const cleanDom = new JSDOM(article.content, { url });
                 document = cleanDom.window.document;
-                // Prepend title
-                const title = document.createElement('h1');
-                title.textContent = article.title || 'Untitled';
-                document.body.prepend(title);
+
+                // Construct Rich Metadata Header
+                const header = document.createElement('div');
+                const siteName = article.siteName || new URL(url).hostname;
+                const author = article.byline || 'Unknown Author';
+
+                let headerHTML = `
+                    <h1>${article.title || 'Untitled'}</h1>
+                    <p><em>Source: ${siteName} | Author: ${author}</em></p>
+                    <hr/>
+                `;
+
+                if (article.excerpt) {
+                    headerHTML += `<blockquote>${article.excerpt}</blockquote><hr/>`;
+                }
+
+                header.innerHTML = headerHTML;
+                document.body.prepend(header);
             }
         }
 
