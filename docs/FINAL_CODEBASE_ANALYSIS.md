@@ -96,11 +96,11 @@ scrapper-suite/
 | Images | ✅ | Via proxy for CORS |
 | Borders & Radius | ✅ | Per-corner support |
 | Box Shadows | ✅ | DropShadow with spread |
-| Linear Gradients | ⚠️ | Partial (no angle parsing) |
-| Radial Gradients | ❌ | Not implemented |
+| Linear Gradients | ✅ | Full support with angle parsing |
+| Radial Gradients | ✅ | Full support (circle/ellipse, size keywords) |
 | CSS Grid | ⚠️ | Falls back to vertical |
 | SVGs | ⚠️ | Rasterized (not editable) |
-| Fonts | ⚠️ | Inter/Roboto fallback only |
+| Fonts | ✅ | Intelligent font mapping with category fallbacks |
 | Pseudo-elements | ❌ | ::before/::after ignored |
 
 ---
@@ -255,9 +255,9 @@ function parseGradient(gradientStr: string): GradientPaint | null {
 - [ ] Add structured logging
 
 ### Phase 10: Visual Fidelity (Q1-Q2 2025)
-- [ ] Gradient angle parsing
-- [ ] Radial gradient support
-- [ ] Font matching system
+- [x] Gradient angle parsing
+- [x] Radial gradient support
+- [x] Font matching system
 - [ ] Parallel image loading
 - [ ] Progress indicators
 

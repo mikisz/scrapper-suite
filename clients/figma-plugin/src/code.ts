@@ -242,27 +242,161 @@ const loadedFonts = new Set<string>();
 const FALLBACK_FONT = { family: "Inter", style: "Regular" };
 const FALLBACK_FONT_BOLD = { family: "Inter", style: "Bold" };
 
+// Font category fallbacks
+const FALLBACK_SERIF = { family: "Georgia", style: "Regular" };
+const FALLBACK_MONO = { family: "Roboto Mono", style: "Regular" };
+
 /**
- * Parse CSS font-family string and return the primary font name
- * e.g., '"Helvetica Neue", Helvetica, Arial, sans-serif' => 'Helvetica Neue'
+ * Font matching database - maps common web fonts to Figma-available alternatives
+ * Keys are lowercase for case-insensitive matching
+ */
+const FONT_MAP: Record<string, string> = {
+    // System fonts → Figma equivalents
+    '-apple-system': 'SF Pro Text',
+    'blinkmacsystemfont': 'SF Pro Text',
+    'system-ui': 'Inter',
+    'segoe ui': 'Inter',
+    
+    // Sans-serif mappings
+    'arial': 'Inter',
+    'helvetica': 'Helvetica Neue',
+    'helvetica neue': 'Helvetica Neue',
+    'verdana': 'Inter',
+    'tahoma': 'Inter',
+    'trebuchet ms': 'Inter',
+    'gill sans': 'Inter',
+    'avenir': 'Inter',
+    'avenir next': 'Inter',
+    'futura': 'Inter',
+    'century gothic': 'Inter',
+    'calibri': 'Inter',
+    'candara': 'Inter',
+    'optima': 'Inter',
+    'lucida grande': 'Inter',
+    'lucida sans': 'Inter',
+    
+    // Serif mappings
+    'times': 'Times New Roman',
+    'times new roman': 'Times New Roman',
+    'georgia': 'Georgia',
+    'palatino': 'Georgia',
+    'palatino linotype': 'Georgia',
+    'book antiqua': 'Georgia',
+    'baskerville': 'Georgia',
+    'garamond': 'Georgia',
+    'cambria': 'Georgia',
+    'didot': 'Georgia',
+    'bodoni': 'Georgia',
+    
+    // Monospace mappings
+    'courier': 'Courier New',
+    'courier new': 'Courier New',
+    'consolas': 'Roboto Mono',
+    'monaco': 'Roboto Mono',
+    'menlo': 'Roboto Mono',
+    'lucida console': 'Roboto Mono',
+    'source code pro': 'Roboto Mono',
+    'fira code': 'Roboto Mono',
+    'jetbrains mono': 'Roboto Mono',
+    'sf mono': 'Roboto Mono',
+    'andale mono': 'Roboto Mono',
+    
+    // Popular Google Fonts (often available in Figma)
+    'roboto': 'Roboto',
+    'open sans': 'Open Sans',
+    'lato': 'Lato',
+    'montserrat': 'Montserrat',
+    'oswald': 'Oswald',
+    'raleway': 'Raleway',
+    'poppins': 'Poppins',
+    'nunito': 'Nunito',
+    'playfair display': 'Playfair Display',
+    'merriweather': 'Merriweather',
+    'source sans pro': 'Source Sans Pro',
+    'pt sans': 'PT Sans',
+    'ubuntu': 'Ubuntu',
+    'noto sans': 'Noto Sans',
+    'work sans': 'Work Sans',
+    'rubik': 'Rubik',
+    'quicksand': 'Quicksand',
+    'karla': 'Karla',
+    'manrope': 'Manrope',
+    'dm sans': 'DM Sans',
+    'ibm plex sans': 'IBM Plex Sans',
+    'ibm plex mono': 'IBM Plex Mono',
+    'space mono': 'Space Mono',
+    'space grotesk': 'Space Grotesk',
+    'plus jakarta sans': 'Plus Jakarta Sans',
+};
+
+/**
+ * Detect font category from font name
+ */
+function detectFontCategory(fontName: string): 'sans-serif' | 'serif' | 'monospace' | 'unknown' {
+    const lower = fontName.toLowerCase();
+    
+    // Monospace indicators
+    if (lower.includes('mono') || lower.includes('code') || lower.includes('console') ||
+        lower.includes('courier') || lower.includes('terminal')) {
+        return 'monospace';
+    }
+    
+    // Serif indicators
+    if (lower.includes('serif') || lower.includes('times') || lower.includes('georgia') ||
+        lower.includes('garamond') || lower.includes('baskerville') || lower.includes('bodoni') ||
+        lower.includes('palatino') || lower.includes('cambria') || lower.includes('antiqua') ||
+        lower.includes('merriweather') || lower.includes('playfair') || lower.includes('didot')) {
+        return 'serif';
+    }
+    
+    // Default to sans-serif for most modern fonts
+    return 'sans-serif';
+}
+
+/**
+ * Parse CSS font-family string and return the best matching font name
+ * Uses intelligent font mapping for common web fonts
  */
 function parseFontFamily(fontFamily: string): string {
     if (!fontFamily) return FALLBACK_FONT.family;
     
-    // Split by comma and get the first font
-    const fonts = fontFamily.split(',').map(f => f.trim());
-    let primary = fonts[0] || FALLBACK_FONT.family;
+    // Split by comma and process each font in order
+    const fonts = fontFamily.split(',').map(f => f.trim().replace(/^["']|["']$/g, ''));
     
-    // Remove quotes
-    primary = primary.replace(/^["']|["']$/g, '');
-    
-    // Skip generic font families
-    const generics = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', '-apple-system', 'BlinkMacSystemFont'];
-    if (generics.includes(primary.toLowerCase())) {
-        return FALLBACK_FONT.family;
+    for (const font of fonts) {
+        const lowerFont = font.toLowerCase();
+        
+        // Skip generic font families
+        const generics = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui'];
+        if (generics.includes(lowerFont)) continue;
+        
+        // Check if we have a direct mapping
+        if (FONT_MAP[lowerFont]) {
+            return FONT_MAP[lowerFont];
+        }
+        
+        // Return the original font name (will be tried as-is)
+        return font;
     }
     
-    return primary;
+    return FALLBACK_FONT.family;
+}
+
+/**
+ * Get the appropriate category fallback font
+ */
+function getCategoryFallback(originalFont: string, weight: string | number): FontName {
+    const category = detectFontCategory(originalFont);
+    const isBold = parseInt(String(weight)) >= 600;
+    
+    switch (category) {
+        case 'serif':
+            return { family: FALLBACK_SERIF.family, style: isBold ? 'Bold' : 'Regular' };
+        case 'monospace':
+            return { family: FALLBACK_MONO.family, style: isBold ? 'Bold' : 'Regular' };
+        default:
+            return isBold ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+    }
 }
 
 /**
@@ -283,10 +417,13 @@ function getFontStyle(weight: string | number): string {
 }
 
 /**
- * Try to load a font, with fallback to Inter
- * Returns the font that was successfully loaded
+ * Try to load a font with intelligent fallback
+ * 1. Try the exact font/style
+ * 2. Try style variations of the same font
+ * 3. Try mapped alternative (from FONT_MAP)
+ * 4. Fall back to category-appropriate font (serif/sans-serif/mono)
  */
-async function tryLoadFont(family: string, weight: string | number): Promise<FontName> {
+async function tryLoadFont(family: string, weight: string | number, originalFamily?: string): Promise<FontName> {
     const style = getFontStyle(weight);
     const fontKey = `${family}:${style}`;
     
@@ -322,12 +459,34 @@ async function tryLoadFont(family: string, weight: string | number): Promise<Fon
         }
     }
     
-    // Fall back to Inter
-    const fallback = parseInt(String(weight)) >= 600 ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+    // Try mapped alternative if we haven't already
+    const lowerFamily = family.toLowerCase();
+    const mappedFont = FONT_MAP[lowerFamily];
+    if (mappedFont && mappedFont !== family) {
+        try {
+            return await tryLoadFont(mappedFont, weight, originalFamily || family);
+        } catch {
+            // Continue to category fallback
+        }
+    }
+    
+    // Fall back to category-appropriate font
+    const fallback = getCategoryFallback(originalFamily || family, weight);
     const fallbackKey = `${fallback.family}:${fallback.style}`;
     if (!loadedFonts.has(fallbackKey)) {
-        await figma.loadFontAsync(fallback);
-        loadedFonts.add(fallbackKey);
+        try {
+            await figma.loadFontAsync(fallback);
+            loadedFonts.add(fallbackKey);
+        } catch {
+            // Ultimate fallback to Inter if category fallback fails
+            const ultimateFallback = parseInt(String(weight)) >= 600 ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+            const ultimateKey = `${ultimateFallback.family}:${ultimateFallback.style}`;
+            if (!loadedFonts.has(ultimateKey)) {
+                await figma.loadFontAsync(ultimateFallback);
+                loadedFonts.add(ultimateKey);
+            }
+            return ultimateFallback;
+        }
     }
     return fallback;
 }
@@ -360,11 +519,24 @@ function extractFonts(node: any, fonts: Set<string>): void {
 }
 
 async function loadFonts(rootData?: any) {
-    // Always load fallback fonts
-    await figma.loadFontAsync(FALLBACK_FONT);
-    await figma.loadFontAsync(FALLBACK_FONT_BOLD);
-    loadedFonts.add(`${FALLBACK_FONT.family}:${FALLBACK_FONT.style}`);
-    loadedFonts.add(`${FALLBACK_FONT_BOLD.family}:${FALLBACK_FONT_BOLD.style}`);
+    // Always load fallback fonts for each category
+    const fallbackFonts = [
+        FALLBACK_FONT,
+        FALLBACK_FONT_BOLD,
+        FALLBACK_SERIF,
+        { family: FALLBACK_SERIF.family, style: 'Bold' },
+        FALLBACK_MONO,
+        { family: FALLBACK_MONO.family, style: 'Bold' },
+    ];
+    
+    for (const font of fallbackFonts) {
+        try {
+            await figma.loadFontAsync(font);
+            loadedFonts.add(`${font.family}:${font.style}`);
+        } catch {
+            // Font not available, skip
+        }
+    }
     
     // Pre-load fonts from the data if available
     if (rootData) {
@@ -570,15 +742,89 @@ function parseRadialGradientPosition(gradientStr: string): { x: number; y: numbe
     return { x, y };
 }
 
+// --- HELPER: Parse Radial Gradient Shape and Size ---
+interface RadialGradientShape {
+    isCircle: boolean;
+    scaleX: number;
+    scaleY: number;
+}
+
+function parseRadialGradientShape(gradientStr: string): RadialGradientShape {
+    // Default: ellipse with farthest-corner sizing
+    let isCircle = false;
+    let scaleX = 1;
+    let scaleY = 1;
+    
+    // Extract the part before "at" or first color
+    const shapeMatch = gradientStr.match(/radial-gradient\(\s*([^,]*?)(?:\s+at\s+|,)/i);
+    const shapePart = shapeMatch ? shapeMatch[1].trim().toLowerCase() : '';
+    
+    // Check for explicit shape
+    if (shapePart.includes('circle')) {
+        isCircle = true;
+    }
+    
+    // Check for size keywords
+    if (shapePart.includes('closest-side')) {
+        scaleX = 0.5;
+        scaleY = isCircle ? 0.5 : 0.5;
+    } else if (shapePart.includes('closest-corner')) {
+        // Closest corner is approximately 0.7 (sqrt(2)/2) of the element
+        scaleX = 0.707;
+        scaleY = isCircle ? 0.707 : 0.707;
+    } else if (shapePart.includes('farthest-side')) {
+        scaleX = 1;
+        scaleY = 1;
+    } else if (shapePart.includes('farthest-corner')) {
+        // Farthest corner extends beyond the element (default for ellipse)
+        scaleX = 1.414; // sqrt(2) to reach corners
+        scaleY = isCircle ? 1.414 : 1.414;
+    }
+    
+    // Check for explicit size (e.g., "50px 100px" or "50px")
+    const sizeMatch = shapePart.match(/(\d+(?:\.\d+)?)(px|%)\s*(\d+(?:\.\d+)?)?(px|%)?/);
+    if (sizeMatch) {
+        // Explicit sizes - normalize to roughly 0-1 scale (assuming 100px = 0.5 scale)
+        const size1 = parseFloat(sizeMatch[1]);
+        const unit1 = sizeMatch[2];
+        const size2 = sizeMatch[3] ? parseFloat(sizeMatch[3]) : size1;
+        
+        if (unit1 === '%') {
+            scaleX = size1 / 100;
+            scaleY = size2 / 100;
+        } else {
+            // px values - approximate scaling (100px ≈ 0.5 in normalized space)
+            scaleX = size1 / 200;
+            scaleY = size2 / 200;
+        }
+        
+        if (!sizeMatch[3]) {
+            // Single value means circle
+            isCircle = true;
+            scaleY = scaleX;
+        }
+    }
+    
+    return { isCircle, scaleX, scaleY };
+}
+
 // --- HELPER: Parse Radial Gradient ---
 function parseRadialGradient(gradientStr: string): GradientPaint | null {
     if (!gradientStr?.includes('radial-gradient')) return null;
+    
     const { x, y } = parseRadialGradientPosition(gradientStr);
-    const scaleX = gradientStr.includes('closest-side') ? 0.5 : 1;
-    const scaleY = scaleX;
-    const transform: Transform = [[scaleX, 0, x - scaleX/2], [0, scaleY, y - scaleY/2]];
+    const { scaleX, scaleY } = parseRadialGradientShape(gradientStr);
+    
+    // Figma radial gradient transform: maps unit circle to desired ellipse
+    // Center at (x, y), scale by (scaleX, scaleY)
+    const transform: Transform = [
+        [scaleX, 0, x - scaleX / 2],
+        [0, scaleY, y - scaleY / 2]
+    ];
+    
     const stops = extractGradientStops(gradientStr);
     if (stops.length < 2) return null;
+    
     return { type: 'GRADIENT_RADIAL', gradientStops: stops, gradientTransform: transform };
 }
 

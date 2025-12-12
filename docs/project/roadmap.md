@@ -31,3 +31,12 @@
     - [x] **Phase 8: Repo Reorganization & Docs**
         - [x] Move to `clients/` directory
         - [x] Update Documentation
+    - [x] **Phase 9: Enhanced Visual Fidelity**
+        - [x] Linear Gradient: Full angle parsing (deg, to direction keywords)
+        - [x] Radial Gradient: Full support (circle/ellipse, position, size keywords)
+        - [x] Font Matching: 50+ web font mappings with category fallbacks (serif/sans/mono)
+        - [x] Browser Pool: Reusable browser instances for performance
+        - [x] URL Validation: Security checks for SSRF protection
+        - [x] Pseudo-elements: ::before/::after support
+        - [x] CSS Grid: Basic support with wrap layout
+        - [x] Parallel image loading with caching

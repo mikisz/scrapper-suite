@@ -23,8 +23,37 @@ var __async = (__this, __arguments, generator) => {
   figma.showUI(__html__, { width: 300, height: 450 });
   let totalNodes = 0;
   let processedNodes = 0;
+  let warnings = [];
   function sendProgress(stage, percent = null, detail = "", status = "") {
     figma.ui.postMessage({ type: "progress", stage, percent, detail, status });
+  }
+  function sendError(message, details) {
+    console.error("Import Error:", message, details);
+    figma.ui.postMessage({
+      type: "error",
+      message,
+      details,
+      suggestion: getErrorSuggestion(message)
+    });
+  }
+  function sendWarning(message) {
+    console.warn("Import Warning:", message);
+    warnings.push(message);
+  }
+  function getErrorSuggestion(error) {
+    if (error.includes("font")) {
+      return "The font is not available in Figma. Using Inter as fallback.";
+    }
+    if (error.includes("image")) {
+      return "Some images could not be loaded. They may be protected or unavailable.";
+    }
+    if (error.includes("SVG")) {
+      return "Some SVGs could not be parsed. They are shown as placeholders.";
+    }
+    if (error.includes("size") || error.includes("resize")) {
+      return "Some elements have invalid sizes and were skipped.";
+    }
+    return "Try using the Chrome Extension for protected pages.";
   }
   function countNodes(data) {
     if (!data) return 0;
@@ -60,8 +89,11 @@ var __async = (__this, __arguments, generator) => {
     if (styles.backgroundImage && styles.backgroundImage.type === "IMAGE" && styles.backgroundImage.url) {
       urls.add(styles.backgroundImage.url);
     }
-    if (node.type === "PSEUDO_ELEMENT" && node.contentType === "IMAGE") {
-      if (styles.backgroundImage && styles.backgroundImage.url) {
+    if (node.type === "PSEUDO_ELEMENT") {
+      if (node.imageUrl) {
+        urls.add(node.imageUrl);
+      }
+      if (styles.backgroundImage && styles.backgroundImage.type === "IMAGE" && styles.backgroundImage.url) {
         urls.add(styles.backgroundImage.url);
       }
     }
@@ -93,35 +125,178 @@ var __async = (__this, __arguments, generator) => {
     }
     if (msg.type === "build") {
       const rootData = msg.data;
+      warnings = [];
+      if (!rootData) {
+        sendError("No data to import", "The data object is empty or undefined.");
+        return;
+      }
+      if (!rootData.type) {
+        sendError("Invalid data format", `Expected a visual tree with a "type" field. Make sure you're using the Chrome Extension output.`);
+        return;
+      }
       totalNodes = countNodes(rootData);
       processedNodes = 0;
-      imageCache.clear();
-      sendProgress("Loading fonts", 25, "", "Preparing fonts...");
-      yield loadFonts(rootData);
-      const urls = /* @__PURE__ */ new Set();
-      extractImageUrls(rootData, urls);
-      if (urls.size > 0) {
-        sendProgress("Loading images", 50, `0/${urls.size} images`, "Downloading images in parallel...");
-        yield preloadImages(rootData);
+      if (totalNodes === 0) {
+        sendError("Empty page", "The scraped page has no visible content. Try a different page.");
+        return;
       }
-      sendProgress("Building layout", 30, `0/${totalNodes} nodes`, "Creating Figma layers...");
-      yield buildNode(rootData, figma.currentPage, void 0);
-      figma.ui.postMessage({ type: "done" });
+      imageCache.clear();
+      try {
+        sendProgress("Loading fonts", 10, "", "Preparing fonts...");
+        yield loadFonts(rootData);
+        sendProgress("Loading fonts", 25, "", "Fonts ready");
+        const urls = /* @__PURE__ */ new Set();
+        extractImageUrls(rootData, urls);
+        if (urls.size > 0) {
+          sendProgress("Loading images", 30, `0/${urls.size} images`, "Downloading images in parallel...");
+          yield preloadImages(rootData);
+          const loadedCount = Array.from(imageCache.values()).filter((v) => v !== null).length;
+          if (loadedCount < urls.size) {
+            sendWarning(`${urls.size - loadedCount} of ${urls.size} images could not be loaded`);
+          }
+          sendProgress("Loading images", 50, `${loadedCount}/${urls.size} loaded`, "Images ready");
+        }
+        sendProgress("Building layout", 55, `0/${totalNodes} nodes`, "Creating Figma layers...");
+        const rootNode = yield buildNode(rootData, figma.currentPage, void 0);
+        if (rootNode) {
+          figma.currentPage.selection = [rootNode];
+          figma.viewport.scrollAndZoomIntoView([rootNode]);
+        }
+        const summary = {
+          type: "done",
+          stats: {
+            totalNodes: processedNodes,
+            imagesLoaded: Array.from(imageCache.values()).filter((v) => v !== null).length,
+            totalImages: imageCache.size
+          }
+        };
+        if (warnings.length > 0) {
+          summary.warnings = warnings;
+        }
+        figma.ui.postMessage(summary);
+      } catch (error) {
+        console.error("Build error:", error);
+        sendError(
+          "Failed to build layout",
+          error.message || "An unexpected error occurred during import."
+        );
+      }
     }
   });
   const loadedFonts = /* @__PURE__ */ new Set();
   const FALLBACK_FONT = { family: "Inter", style: "Regular" };
   const FALLBACK_FONT_BOLD = { family: "Inter", style: "Bold" };
+  const FALLBACK_SERIF = { family: "Georgia", style: "Regular" };
+  const FALLBACK_MONO = { family: "Roboto Mono", style: "Regular" };
+  const FONT_MAP = {
+    // System fonts → Figma equivalents
+    "-apple-system": "SF Pro Text",
+    "blinkmacsystemfont": "SF Pro Text",
+    "system-ui": "Inter",
+    "segoe ui": "Inter",
+    // Sans-serif mappings
+    "arial": "Inter",
+    "helvetica": "Helvetica Neue",
+    "helvetica neue": "Helvetica Neue",
+    "verdana": "Inter",
+    "tahoma": "Inter",
+    "trebuchet ms": "Inter",
+    "gill sans": "Inter",
+    "avenir": "Inter",
+    "avenir next": "Inter",
+    "futura": "Inter",
+    "century gothic": "Inter",
+    "calibri": "Inter",
+    "candara": "Inter",
+    "optima": "Inter",
+    "lucida grande": "Inter",
+    "lucida sans": "Inter",
+    // Serif mappings
+    "times": "Times New Roman",
+    "times new roman": "Times New Roman",
+    "georgia": "Georgia",
+    "palatino": "Georgia",
+    "palatino linotype": "Georgia",
+    "book antiqua": "Georgia",
+    "baskerville": "Georgia",
+    "garamond": "Georgia",
+    "cambria": "Georgia",
+    "didot": "Georgia",
+    "bodoni": "Georgia",
+    // Monospace mappings
+    "courier": "Courier New",
+    "courier new": "Courier New",
+    "consolas": "Roboto Mono",
+    "monaco": "Roboto Mono",
+    "menlo": "Roboto Mono",
+    "lucida console": "Roboto Mono",
+    "source code pro": "Roboto Mono",
+    "fira code": "Roboto Mono",
+    "jetbrains mono": "Roboto Mono",
+    "sf mono": "Roboto Mono",
+    "andale mono": "Roboto Mono",
+    // Popular Google Fonts (often available in Figma)
+    "roboto": "Roboto",
+    "open sans": "Open Sans",
+    "lato": "Lato",
+    "montserrat": "Montserrat",
+    "oswald": "Oswald",
+    "raleway": "Raleway",
+    "poppins": "Poppins",
+    "nunito": "Nunito",
+    "playfair display": "Playfair Display",
+    "merriweather": "Merriweather",
+    "source sans pro": "Source Sans Pro",
+    "pt sans": "PT Sans",
+    "ubuntu": "Ubuntu",
+    "noto sans": "Noto Sans",
+    "work sans": "Work Sans",
+    "rubik": "Rubik",
+    "quicksand": "Quicksand",
+    "karla": "Karla",
+    "manrope": "Manrope",
+    "dm sans": "DM Sans",
+    "ibm plex sans": "IBM Plex Sans",
+    "ibm plex mono": "IBM Plex Mono",
+    "space mono": "Space Mono",
+    "space grotesk": "Space Grotesk",
+    "plus jakarta sans": "Plus Jakarta Sans"
+  };
+  function detectFontCategory(fontName) {
+    const lower = fontName.toLowerCase();
+    if (lower.includes("mono") || lower.includes("code") || lower.includes("console") || lower.includes("courier") || lower.includes("terminal")) {
+      return "monospace";
+    }
+    if (lower.includes("serif") || lower.includes("times") || lower.includes("georgia") || lower.includes("garamond") || lower.includes("baskerville") || lower.includes("bodoni") || lower.includes("palatino") || lower.includes("cambria") || lower.includes("antiqua") || lower.includes("merriweather") || lower.includes("playfair") || lower.includes("didot")) {
+      return "serif";
+    }
+    return "sans-serif";
+  }
   function parseFontFamily(fontFamily) {
     if (!fontFamily) return FALLBACK_FONT.family;
-    const fonts = fontFamily.split(",").map((f) => f.trim());
-    let primary = fonts[0] || FALLBACK_FONT.family;
-    primary = primary.replace(/^["']|["']$/g, "");
-    const generics = ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "-apple-system", "BlinkMacSystemFont"];
-    if (generics.includes(primary.toLowerCase())) {
-      return FALLBACK_FONT.family;
+    const fonts = fontFamily.split(",").map((f) => f.trim().replace(/^["']|["']$/g, ""));
+    for (const font of fonts) {
+      const lowerFont = font.toLowerCase();
+      const generics = ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"];
+      if (generics.includes(lowerFont)) continue;
+      if (FONT_MAP[lowerFont]) {
+        return FONT_MAP[lowerFont];
+      }
+      return font;
     }
-    return primary;
+    return FALLBACK_FONT.family;
+  }
+  function getCategoryFallback(originalFont, weight) {
+    const category = detectFontCategory(originalFont);
+    const isBold = parseInt(String(weight)) >= 600;
+    switch (category) {
+      case "serif":
+        return { family: FALLBACK_SERIF.family, style: isBold ? "Bold" : "Regular" };
+      case "monospace":
+        return { family: FALLBACK_MONO.family, style: isBold ? "Bold" : "Regular" };
+      default:
+        return isBold ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+    }
   }
   function getFontStyle(weight) {
     const w = typeof weight === "string" ? parseInt(weight) || 400 : weight;
@@ -135,7 +310,7 @@ var __async = (__this, __arguments, generator) => {
     if (w <= 800) return "ExtraBold";
     return "Black";
   }
-  function tryLoadFont(family, weight) {
+  function tryLoadFont(family, weight, originalFamily) {
     return __async(this, null, function* () {
       const style = getFontStyle(weight);
       const fontKey = `${family}:${style}`;
@@ -164,11 +339,29 @@ var __async = (__this, __arguments, generator) => {
           }
         }
       }
-      const fallback = parseInt(String(weight)) >= 600 ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+      const lowerFamily = family.toLowerCase();
+      const mappedFont = FONT_MAP[lowerFamily];
+      if (mappedFont && mappedFont !== family) {
+        try {
+          return yield tryLoadFont(mappedFont, weight, originalFamily || family);
+        } catch (e) {
+        }
+      }
+      const fallback = getCategoryFallback(originalFamily || family, weight);
       const fallbackKey = `${fallback.family}:${fallback.style}`;
       if (!loadedFonts.has(fallbackKey)) {
-        yield figma.loadFontAsync(fallback);
-        loadedFonts.add(fallbackKey);
+        try {
+          yield figma.loadFontAsync(fallback);
+          loadedFonts.add(fallbackKey);
+        } catch (e) {
+          const ultimateFallback = parseInt(String(weight)) >= 600 ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+          const ultimateKey = `${ultimateFallback.family}:${ultimateFallback.style}`;
+          if (!loadedFonts.has(ultimateKey)) {
+            yield figma.loadFontAsync(ultimateFallback);
+            loadedFonts.add(ultimateKey);
+          }
+          return ultimateFallback;
+        }
       }
       return fallback;
     });
@@ -194,10 +387,21 @@ var __async = (__this, __arguments, generator) => {
   }
   function loadFonts(rootData) {
     return __async(this, null, function* () {
-      yield figma.loadFontAsync(FALLBACK_FONT);
-      yield figma.loadFontAsync(FALLBACK_FONT_BOLD);
-      loadedFonts.add(`${FALLBACK_FONT.family}:${FALLBACK_FONT.style}`);
-      loadedFonts.add(`${FALLBACK_FONT_BOLD.family}:${FALLBACK_FONT_BOLD.style}`);
+      const fallbackFonts = [
+        FALLBACK_FONT,
+        FALLBACK_FONT_BOLD,
+        FALLBACK_SERIF,
+        { family: FALLBACK_SERIF.family, style: "Bold" },
+        FALLBACK_MONO,
+        { family: FALLBACK_MONO.family, style: "Bold" }
+      ];
+      for (const font of fallbackFonts) {
+        try {
+          yield figma.loadFontAsync(font);
+          loadedFonts.add(`${font.family}:${font.style}`);
+        } catch (e) {
+        }
+      }
       if (rootData) {
         const fonts = /* @__PURE__ */ new Set();
         extractFonts(rootData, fonts);
@@ -382,12 +586,55 @@ var __async = (__this, __arguments, generator) => {
     }
     return { x, y };
   }
+  function parseRadialGradientShape(gradientStr) {
+    let isCircle = false;
+    let scaleX = 1;
+    let scaleY = 1;
+    const shapeMatch = gradientStr.match(/radial-gradient\(\s*([^,]*?)(?:\s+at\s+|,)/i);
+    const shapePart = shapeMatch ? shapeMatch[1].trim().toLowerCase() : "";
+    if (shapePart.includes("circle")) {
+      isCircle = true;
+    }
+    if (shapePart.includes("closest-side")) {
+      scaleX = 0.5;
+      scaleY = isCircle ? 0.5 : 0.5;
+    } else if (shapePart.includes("closest-corner")) {
+      scaleX = 0.707;
+      scaleY = isCircle ? 0.707 : 0.707;
+    } else if (shapePart.includes("farthest-side")) {
+      scaleX = 1;
+      scaleY = 1;
+    } else if (shapePart.includes("farthest-corner")) {
+      scaleX = 1.414;
+      scaleY = isCircle ? 1.414 : 1.414;
+    }
+    const sizeMatch = shapePart.match(/(\d+(?:\.\d+)?)(px|%)\s*(\d+(?:\.\d+)?)?(px|%)?/);
+    if (sizeMatch) {
+      const size1 = parseFloat(sizeMatch[1]);
+      const unit1 = sizeMatch[2];
+      const size2 = sizeMatch[3] ? parseFloat(sizeMatch[3]) : size1;
+      if (unit1 === "%") {
+        scaleX = size1 / 100;
+        scaleY = size2 / 100;
+      } else {
+        scaleX = size1 / 200;
+        scaleY = size2 / 200;
+      }
+      if (!sizeMatch[3]) {
+        isCircle = true;
+        scaleY = scaleX;
+      }
+    }
+    return { isCircle, scaleX, scaleY };
+  }
   function parseRadialGradient(gradientStr) {
     if (!(gradientStr == null ? void 0 : gradientStr.includes("radial-gradient"))) return null;
     const { x, y } = parseRadialGradientPosition(gradientStr);
-    const scaleX = gradientStr.includes("closest-side") ? 0.5 : 1;
-    const scaleY = scaleX;
-    const transform = [[scaleX, 0, x - scaleX / 2], [0, scaleY, y - scaleY / 2]];
+    const { scaleX, scaleY } = parseRadialGradientShape(gradientStr);
+    const transform = [
+      [scaleX, 0, x - scaleX / 2],
+      [0, scaleY, y - scaleY / 2]
+    ];
     const stops = extractGradientStops(gradientStr);
     if (stops.length < 2) return null;
     return { type: "GRADIENT_RADIAL", gradientStops: stops, gradientTransform: transform };
@@ -406,9 +653,134 @@ var __async = (__this, __arguments, generator) => {
     if (gradientStr.includes("linear-gradient")) return parseLinearGradient(gradientStr);
     return null;
   }
+  function parseGridTemplate(template, containerSize = 0) {
+    const result = {
+      count: 0,
+      tracks: [],
+      hasAutoFit: false,
+      hasAutoFill: false
+    };
+    if (!template || template === "none") {
+      return result;
+    }
+    const repeatMatch = template.match(/repeat\(\s*(auto-fill|auto-fit|\d+)\s*,\s*(.+?)\s*\)/i);
+    if (repeatMatch) {
+      const repeatCount = repeatMatch[1];
+      const repeatValue = repeatMatch[2].trim();
+      if (repeatCount === "auto-fit") {
+        result.hasAutoFit = true;
+        const minmaxMatch = repeatValue.match(/minmax\(\s*(\d+)(?:px)?\s*,/);
+        if (minmaxMatch && containerSize > 0) {
+          const minWidth = parseInt(minmaxMatch[1]);
+          result.count = Math.max(1, Math.floor(containerSize / minWidth));
+        } else {
+          result.count = 3;
+        }
+      } else if (repeatCount === "auto-fill") {
+        result.hasAutoFill = true;
+        const minmaxMatch = repeatValue.match(/minmax\(\s*(\d+)(?:px)?\s*,/);
+        if (minmaxMatch && containerSize > 0) {
+          const minWidth = parseInt(minmaxMatch[1]);
+          result.count = Math.max(1, Math.floor(containerSize / minWidth));
+        } else {
+          result.count = 3;
+        }
+      } else {
+        result.count = parseInt(repeatCount) || 1;
+      }
+      const trackInfo = parseTrackValue(repeatValue);
+      for (let i = 0; i < result.count; i++) {
+        result.tracks.push(trackInfo);
+      }
+      return result;
+    }
+    const tracks = splitGridTracks(template);
+    for (const track of tracks) {
+      const trackInfo = parseTrackValue(track);
+      result.tracks.push(trackInfo);
+    }
+    result.count = result.tracks.length;
+    return result;
+  }
+  function splitGridTracks(template) {
+    const tracks = [];
+    let current = "";
+    let parenDepth = 0;
+    for (const char of template) {
+      if (char === "(") {
+        parenDepth++;
+        current += char;
+      } else if (char === ")") {
+        parenDepth--;
+        current += char;
+      } else if (char === " " && parenDepth === 0) {
+        if (current.trim()) {
+          tracks.push(current.trim());
+        }
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) {
+      tracks.push(current.trim());
+    }
+    return tracks;
+  }
+  function parseTrackValue(value) {
+    const trimmed = value.trim();
+    if (trimmed === "auto") {
+      return { value: 0, unit: "auto" };
+    }
+    if (trimmed.startsWith("minmax")) {
+      const match = trimmed.match(/minmax\(\s*(\d+)(?:px)?\s*,/);
+      if (match) {
+        return { value: parseInt(match[1]), unit: "minmax" };
+      }
+      return { value: 0, unit: "minmax" };
+    }
+    if (trimmed.endsWith("fr")) {
+      return { value: parseFloat(trimmed) || 1, unit: "fr" };
+    }
+    if (trimmed.endsWith("px")) {
+      return { value: parseFloat(trimmed) || 0, unit: "px" };
+    }
+    if (trimmed.endsWith("%")) {
+      return { value: parseFloat(trimmed) || 0, unit: "px" };
+    }
+    const num = parseFloat(trimmed);
+    if (!isNaN(num)) {
+      return { value: num, unit: "px" };
+    }
+    return { value: 0, unit: "auto" };
+  }
+  function parseGridSpan(value) {
+    if (!value || value === "auto") {
+      return { start: 0, span: 1 };
+    }
+    const spanMatch = value.match(/span\s+(\d+)/);
+    if (spanMatch) {
+      return { start: 0, span: parseInt(spanMatch[1]) || 1 };
+    }
+    const slashMatch = value.match(/(\d+)\s*\/\s*(\d+)/);
+    if (slashMatch) {
+      const start = parseInt(slashMatch[1]) || 1;
+      const end = parseInt(slashMatch[2]) || start + 1;
+      return { start, span: end - start };
+    }
+    const startSpanMatch = value.match(/(\d+)\s*\/\s*span\s+(\d+)/);
+    if (startSpanMatch) {
+      return { start: parseInt(startSpanMatch[1]) || 1, span: parseInt(startSpanMatch[2]) || 1 };
+    }
+    const num = parseInt(value);
+    if (!isNaN(num)) {
+      return { start: num, span: 1 };
+    }
+    return { start: 0, span: 1 };
+  }
   function buildNode(data, parent, parentData) {
     return __async(this, null, function* () {
-      var _a, _b, _c, _d, _e, _f, _g, _h;
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
       if (!data) return;
       processedNodes++;
       if (processedNodes % 10 === 0 || processedNodes === totalNodes) {
@@ -418,22 +790,88 @@ var __async = (__this, __arguments, generator) => {
       let node;
       const s = data.styles || {};
       if (data.type === "VECTOR") {
+        let svgParsed = false;
         try {
-          const svgNode = figma.createNodeFromSvg(data.svgString);
+          let cleanedSvg = data.svgString;
+          cleanedSvg = cleanedSvg.replace(/\s*xmlns:xlink="[^"]*"/g, "");
+          cleanedSvg = cleanedSvg.replace(/\s*class="[^"]*"/g, "");
+          cleanedSvg = cleanedSvg.replace(/\s*data-[a-z-]+="[^"]*"/g, "");
+          if (!cleanedSvg.includes('xmlns="')) {
+            cleanedSvg = cleanedSvg.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+          }
+          cleanedSvg = cleanedSvg.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+          const svgNode = figma.createNodeFromSvg(cleanedSvg);
           svgNode.name = "SVG";
           node = svgNode;
+          svgParsed = true;
           if (s.width && s.height && s.width > 0 && s.height > 0) {
-            svgNode.resize(s.width, s.height);
+            if (data.viewBox) {
+              const viewBoxParts = data.viewBox.split(/\s+/).map(Number);
+              if (viewBoxParts.length === 4) {
+                const vbWidth = viewBoxParts[2];
+                const vbHeight = viewBoxParts[3];
+                const aspectRatio = vbWidth / vbHeight;
+                const targetWidth = s.width;
+                const targetHeight = s.height;
+                if (targetWidth / targetHeight > aspectRatio) {
+                  svgNode.resize(targetHeight * aspectRatio, targetHeight);
+                } else {
+                  svgNode.resize(targetWidth, targetWidth / aspectRatio);
+                }
+              } else {
+                svgNode.resize(s.width, s.height);
+              }
+            } else {
+              svgNode.resize(s.width, s.height);
+            }
           }
           if (s.boxShadow) {
             svgNode.effects = parseBoxShadow(s.boxShadow);
           }
+          if (data.svgFill && svgNode.children && svgNode.children.length <= 5) {
+            try {
+              for (const child of svgNode.findAll()) {
+                if ("fills" in child && child.fills) {
+                  const fills = child.fills;
+                  if (fills.length > 0 && fills[0].type === "SOLID") {
+                    child.fills = [{
+                      type: "SOLID",
+                      color: data.svgFill
+                    }];
+                  }
+                }
+              }
+            } catch (e) {
+            }
+          }
         } catch (e) {
-          console.warn("Failed to parse SVG, creating placeholder:", e);
-          const rect = figma.createRectangle();
-          rect.name = "SVG (failed to parse)";
-          rect.fills = [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9 } }];
-          node = rect;
+          svgParsed = false;
+        }
+        if (!svgParsed) {
+          try {
+            const pathMatch = data.svgString.match(/<path[^>]*d="([^"]+)"[^>]*>/);
+            if (pathMatch) {
+              const simpleSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s.width || 24} ${s.height || 24}"><path d="${pathMatch[1]}" fill="currentColor"/></svg>`;
+              const svgNode = figma.createNodeFromSvg(simpleSvg);
+              svgNode.name = "SVG (simplified)";
+              node = svgNode;
+              svgParsed = true;
+              if (s.width && s.height) {
+                svgNode.resize(s.width, s.height);
+              }
+            }
+          } catch (e) {
+          }
+          if (!svgParsed) {
+            console.warn("Failed to parse SVG, creating placeholder");
+            const rect = figma.createRectangle();
+            rect.name = "SVG (parse failed)";
+            rect.fills = [{ type: "SOLID", color: { r: 0.95, g: 0.95, b: 0.95 } }];
+            rect.strokes = [{ type: "SOLID", color: { r: 0.8, g: 0.8, b: 0.8 } }];
+            rect.strokeWeight = 1;
+            rect.strokeAlign = "INSIDE";
+            node = rect;
+          }
         }
       } else if (data.type === "IMAGE") {
         const rect = figma.createRectangle();
@@ -464,6 +902,12 @@ var __async = (__this, __arguments, generator) => {
           if (s.color) {
             text.fills = [{ type: "SOLID", color: s.color }];
           }
+          if (s.letterSpacing) {
+            text.letterSpacing = { value: s.letterSpacing, unit: "PIXELS" };
+          }
+          if (s.textTransform) {
+            text.textCase = getTextCase(s.textTransform);
+          }
           if (s.boxShadow) {
             text.effects = parseBoxShadow(s.boxShadow);
           }
@@ -475,7 +919,13 @@ var __async = (__this, __arguments, generator) => {
           if (s.backgroundColor) {
             fills.push({ type: "SOLID", color: s.backgroundColor, opacity: s.opacity });
           }
-          if (s.backgroundImage && s.backgroundImage.type === "IMAGE") {
+          if (data.imageUrl) {
+            const imgBytes = imageCache.get(data.imageUrl);
+            if (imgBytes) {
+              const imgHash = figma.createImage(imgBytes).hash;
+              fills.push({ type: "IMAGE", scaleMode: "FILL", imageHash: imgHash });
+            }
+          } else if (s.backgroundImage && s.backgroundImage.type === "IMAGE") {
             const bgBytes = imageCache.get(s.backgroundImage.url);
             if (bgBytes) {
               const bgHash = figma.createImage(bgBytes).hash;
@@ -499,6 +949,11 @@ var __async = (__this, __arguments, generator) => {
             frame.strokes = [{ type: "SOLID", color: s.border.color }];
             frame.strokeWeight = s.border.width;
             frame.strokeAlign = "INSIDE";
+          }
+          if (s.width === "auto" || !s.width || s.width === 0) {
+            if (data.contentType === "IMAGE" || data.contentType === "GRADIENT") {
+              frame.resize(24, 24);
+            }
           }
         }
       } else if (data.type === "TEXT_NODE" || data.type === "TEXT" && data.content) {
@@ -589,27 +1044,36 @@ var __async = (__this, __arguments, generator) => {
       }
       if (data.type === "FRAME" && node.type === "FRAME") {
         const frame = node;
-        const countGridColumns = (template) => {
-          if (!template || template === "none") return 1;
-          const repeatMatch = template.match(/repeat\(\s*(\d+)/);
-          if (repeatMatch) return parseInt(repeatMatch[1]) || 1;
-          return template.trim().split(/\s+/).filter((p) => p && p !== "none").length || 1;
-        };
         if (s.display === "grid") {
-          const columns = countGridColumns(s.gridTemplateColumns);
+          const containerWidth = s.width || 0;
+          const gridInfo = parseGridTemplate(s.gridTemplateColumns, containerWidth);
+          const columns = gridInfo.count || 1;
+          const paddingH = (((_a = s.padding) == null ? void 0 : _a.left) || 0) + (((_b = s.padding) == null ? void 0 : _b.right) || 0);
+          const columnGap = s.columnGap || s.gap || 0;
+          const availableWidth = containerWidth - paddingH;
+          data._gridInfo = {
+            columns,
+            tracks: gridInfo.tracks,
+            containerWidth: availableWidth,
+            columnGap,
+            rowGap: s.rowGap || s.gap || 0
+          };
           if (columns > 1) {
             frame.layoutMode = "HORIZONTAL";
             frame.layoutWrap = "WRAP";
+            gridInfo.tracks.length > 0 && gridInfo.tracks.every((t) => t.unit === "fr");
+            gridInfo.tracks.length > 0 && gridInfo.tracks.every((t) => t.unit === "px");
           } else {
             frame.layoutMode = "VERTICAL";
           }
-          frame.itemSpacing = s.columnGap || s.gap || 0;
+          frame.itemSpacing = columnGap;
           frame.counterAxisSpacing = s.rowGap || s.gap || 0;
-          frame.paddingTop = ((_a = s.padding) == null ? void 0 : _a.top) || 0;
-          frame.paddingRight = ((_b = s.padding) == null ? void 0 : _b.right) || 0;
-          frame.paddingBottom = ((_c = s.padding) == null ? void 0 : _c.bottom) || 0;
-          frame.paddingLeft = ((_d = s.padding) == null ? void 0 : _d.left) || 0;
-          switch (s.alignItems) {
+          frame.paddingTop = ((_c = s.padding) == null ? void 0 : _c.top) || 0;
+          frame.paddingRight = ((_d = s.padding) == null ? void 0 : _d.right) || 0;
+          frame.paddingBottom = ((_e = s.padding) == null ? void 0 : _e.bottom) || 0;
+          frame.paddingLeft = ((_f = s.padding) == null ? void 0 : _f.left) || 0;
+          const alignItems = s.alignItems || "stretch";
+          switch (alignItems) {
             case "center":
               frame.counterAxisAlignItems = "CENTER";
               break;
@@ -617,14 +1081,23 @@ var __async = (__this, __arguments, generator) => {
             case "flex-end":
               frame.counterAxisAlignItems = "MAX";
               break;
+            case "start":
+            case "flex-start":
+              frame.counterAxisAlignItems = "MIN";
+              break;
             default:
               frame.counterAxisAlignItems = "MIN";
           }
-          switch (s.justifyContent) {
+          const justifyContent = s.justifyContent || "start";
+          switch (justifyContent) {
             case "center":
               frame.primaryAxisAlignItems = "CENTER";
               break;
             case "space-between":
+              frame.primaryAxisAlignItems = "SPACE_BETWEEN";
+              break;
+            case "space-around":
+            case "space-evenly":
               frame.primaryAxisAlignItems = "SPACE_BETWEEN";
               break;
             case "end":
@@ -641,10 +1114,10 @@ var __async = (__this, __arguments, generator) => {
             frame.counterAxisSpacing = s.rowGap || s.gap || 0;
           }
           frame.itemSpacing = s.columnGap || s.gap || 0;
-          frame.paddingTop = ((_e = s.padding) == null ? void 0 : _e.top) || 0;
-          frame.paddingRight = ((_f = s.padding) == null ? void 0 : _f.right) || 0;
-          frame.paddingBottom = ((_g = s.padding) == null ? void 0 : _g.bottom) || 0;
-          frame.paddingLeft = ((_h = s.padding) == null ? void 0 : _h.left) || 0;
+          frame.paddingTop = ((_g = s.padding) == null ? void 0 : _g.top) || 0;
+          frame.paddingRight = ((_h = s.padding) == null ? void 0 : _h.right) || 0;
+          frame.paddingBottom = ((_i = s.padding) == null ? void 0 : _i.bottom) || 0;
+          frame.paddingLeft = ((_j = s.padding) == null ? void 0 : _j.left) || 0;
           switch (s.alignItems) {
             case "center":
               frame.counterAxisAlignItems = "CENTER";
@@ -674,7 +1147,44 @@ var __async = (__this, __arguments, generator) => {
       }
       if (data.children) {
         for (const childData of data.children) {
-          yield buildNode(childData, node, data);
+          const childNode = yield buildNode(childData, node, data);
+          if (childNode && s.display === "grid" && data._gridInfo) {
+            const gridInfo = data._gridInfo;
+            const childStyles = childData.styles || {};
+            const colSpan = parseGridSpan(childStyles.gridColumn || childStyles.gridColumnStart);
+            const actualSpan = Math.min(colSpan.span, gridInfo.columns);
+            if (gridInfo.tracks.length > 0 && childNode.type === "FRAME") {
+              const totalFr = gridInfo.tracks.reduce((sum, t) => t.unit === "fr" ? sum + t.value : sum, 0);
+              const totalPx = gridInfo.tracks.reduce((sum, t) => t.unit === "px" ? sum + t.value : sum, 0);
+              const totalGaps = (gridInfo.columns - 1) * gridInfo.columnGap;
+              const availableForFr = gridInfo.containerWidth - totalPx - totalGaps;
+              let itemWidth = 0;
+              const startIdx = 0;
+              for (let i = 0; i < actualSpan && i < gridInfo.tracks.length; i++) {
+                const track = gridInfo.tracks[startIdx + i];
+                if (!track) continue;
+                if (track.unit === "fr") {
+                  itemWidth += track.value / totalFr * availableForFr;
+                } else if (track.unit === "px") {
+                  itemWidth += track.value;
+                } else if (track.unit === "minmax") {
+                  itemWidth += track.value || availableForFr / gridInfo.columns;
+                } else {
+                  itemWidth += availableForFr / gridInfo.columns;
+                }
+                if (i > 0) {
+                  itemWidth += gridInfo.columnGap;
+                }
+              }
+              if (itemWidth > 0) {
+                try {
+                  const currentHeight = childNode.height || 100;
+                  childNode.resize(Math.max(1, itemWidth), Math.max(1, currentHeight));
+                } catch (e) {
+                }
+              }
+            }
+          }
         }
       }
       return node;

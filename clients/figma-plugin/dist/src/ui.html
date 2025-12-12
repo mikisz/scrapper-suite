@@ -243,6 +243,36 @@
       }
     }
 
+    // Helper to format error messages for display
+    function formatErrorMessage(error, context = '') {
+      const errorStr = error?.message || error?.error || String(error);
+      const suggestion = error?.suggestion || '';
+      
+      // Common error patterns with user-friendly messages
+      const errorMappings = {
+        'Failed to fetch': 'Cannot connect to the scraper server. Is it running?',
+        'NetworkError': 'Network error. Check your internet connection.',
+        'JSON': 'Invalid response from server. The URL may be inaccessible.',
+        'CORS': 'Cross-origin error. The server may need configuration.',
+        'timeout': 'Request timed out. The page may be too slow or complex.',
+        'SyntaxError': 'Invalid JSON format. Please check the pasted data.',
+        '404': 'Page not found. Check the URL is correct.',
+        '403': 'Access forbidden. The site may block scraping.',
+        '500': 'Server error. Try again or use a different URL.',
+        '502': 'Server unavailable. The scraper may be starting up.',
+        '503': 'Service unavailable. Try again in a moment.',
+      };
+      
+      for (const [pattern, friendly] of Object.entries(errorMappings)) {
+        if (errorStr.includes(pattern)) {
+          return suggestion ? `${friendly} ${suggestion}` : friendly;
+        }
+      }
+      
+      // Return original with suggestion if available
+      return suggestion ? `${errorStr}. ${suggestion}` : errorStr;
+    }
+
     importBtn.onclick = async () => {
       const jsonText = jsonInput.value.trim();
 
@@ -254,15 +284,27 @@
         updateProgress('Parsing JSON', 10);
 
         try {
-          const parsed = JSON.parse(jsonText);
+          let parsed;
+          try {
+            parsed = JSON.parse(jsonText);
+          } catch (parseErr) {
+            throw new Error('Invalid JSON format. Please check the pasted data is valid JSON.');
+          }
+          
           const dataToBuild = parsed.data || parsed;
-          if (!dataToBuild) throw new Error("Invalid JSON: Missing 'data'");
+          if (!dataToBuild) {
+            throw new Error("Missing 'data' field. Paste the full output from the Chrome Extension.");
+          }
+          
+          if (!dataToBuild.type) {
+            throw new Error("Invalid data structure. Expected visual tree with 'type' field.");
+          }
 
           updateProgress('Building layout', 20);
           setStatus('Generating layers...');
           parent.postMessage({ pluginMessage: { type: 'build', data: dataToBuild } }, '*');
         } catch (err) {
-          setStatus(err.message, 'error');
+          setStatus(formatErrorMessage(err), 'error');
           showProgress(false);
           importBtn.disabled = false;
         }
@@ -274,14 +316,26 @@
       const targetUrl = targetUrlInput.value;
 
       if (!targetUrl) {
-        setStatus('Please enter a URL first', 'error');
+        setStatus('Please enter a website URL to import', 'error');
+        return;
+      }
+      
+      // Basic URL validation
+      try {
+        const urlObj = new URL(targetUrl);
+        if (!['http:', 'https:'].includes(urlObj.protocol)) {
+          setStatus('URL must start with http:// or https://', 'error');
+          return;
+        }
+      } catch {
+        setStatus('Please enter a valid URL (e.g., https://example.com)', 'error');
         return;
       }
 
       importBtn.disabled = true;
       showProgress(true);
       updateProgress('Connecting to scraper', null);
-      setStatus('Scraping website...');
+      setStatus('Scraping website... This may take 10-30 seconds.');
 
       try {
         const response = await fetch(apiUrl, {
@@ -290,19 +344,31 @@
           body: JSON.stringify({ url: targetUrl })
         });
 
+        const json = await response.json();
+        
         if (!response.ok) {
-          throw new Error(`Scraper Error: ${response.status}`);
+          // Server returned an error with details
+          const errorMsg = json.error || `Server error (${response.status})`;
+          const suggestion = json.suggestion || '';
+          throw { message: errorMsg, suggestion };
+        }
+        
+        // Check for warnings
+        if (json.warning) {
+          setStatus(json.warning);
+        }
+        
+        if (!json.data) {
+          throw new Error('Server returned no data. The page may be empty or protected.');
         }
 
         updateProgress('Parsing response', 15);
-        const json = await response.json();
-
         updateProgress('Building layout', 20);
         setStatus('Building Figma layers...');
         parent.postMessage({ pluginMessage: { type: 'build', data: json.data } }, '*');
 
       } catch (err) {
-        setStatus(`Failed: ${err.message}`, 'error');
+        setStatus(formatErrorMessage(err), 'error');
         showProgress(false);
         importBtn.disabled = false;
       }
@@ -315,12 +381,37 @@
 
       if (msg.type === 'done') {
         updateProgress('Complete', 100);
-        setStatus('Import Complete!', 'success');
+        
+        // Build summary message
+        let statusMsg = 'Import Complete!';
+        if (msg.stats) {
+          statusMsg = `✓ Imported ${msg.stats.totalNodes} layers`;
+          if (msg.stats.totalImages > 0) {
+            statusMsg += `, ${msg.stats.imagesLoaded}/${msg.stats.totalImages} images`;
+          }
+        }
+        
+        // Show warnings if any
+        if (msg.warnings && msg.warnings.length > 0) {
+          statusMsg += ` (${msg.warnings.length} warning${msg.warnings.length > 1 ? 's' : ''})`;
+          console.warn('Import warnings:', msg.warnings);
+        }
+        
+        setStatus(statusMsg, 'success');
         importBtn.disabled = false;
         setTimeout(() => {
           setStatus('Ready to import');
           showProgress(false);
-        }, 2000);
+        }, 3000);
+      }
+      
+      if (msg.type === 'error') {
+        updateProgress('Failed', 0);
+        const errorMsg = msg.message || 'An error occurred';
+        const suggestion = msg.suggestion ? ` ${msg.suggestion}` : '';
+        setStatus(`✗ ${errorMsg}${suggestion}`, 'error');
+        showProgress(false);
+        importBtn.disabled = false;
       }
 
       if (msg.type === 'progress') {
