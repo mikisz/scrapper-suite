@@ -11,15 +11,6 @@ function downloadImage(url: string): Promise<Uint8Array | null> {
         // Handler for the response
         const handler = (msg: any) => {
             if (msg.type === 'image-data' && msg.id === id) {
-                // Remove listener
-                // Note: In strict Figma environment, we might need a more robust listener management, 
-                // but for this plugin scope, simple onmessage checking in the main loop is tricky.
-                // Actually, figma.ui.onmessage is a global listener. We need to hook into it.
-                // Ideally we'd have a global event bus.
-                // For simplicity, let's assume we modify the main onmessage to dispatch here.
-                // BUT, redefining onmessage inside a function is bad.
-
-                // REFACTOR: We'll attach the resolver to a global map.
                 delete (pendingImages as any)[id];
                 if (msg.error) resolve(null);
                 else resolve(msg.data);
@@ -44,7 +35,6 @@ function downloadImage(url: string): Promise<Uint8Array | null> {
 const pendingImages: { [key: string]: (data: Uint8Array | null) => void } = {};
 
 // Update main listener to dispatch image responses
-const originalOnMessage = figma.ui.onmessage;
 figma.ui.onmessage = async (msg) => {
     // Handle Image Response
     if (msg.type === 'image-data') {
@@ -57,11 +47,9 @@ figma.ui.onmessage = async (msg) => {
     if (msg.type === 'build') {
         const rootData = msg.data;
         await loadFonts();
-        const frame = await buildNode(rootData);
-        if (frame) {
-            figma.currentPage.appendChild(frame);
-            figma.viewport.scrollAndZoomIntoView([frame]);
-        }
+        // Create a temporary frame or just append to page?
+        // Let's create the root node directly on page
+        await buildNode(rootData, figma.currentPage, undefined);
         figma.ui.postMessage({ type: 'done' });
     }
 };
@@ -73,170 +61,156 @@ async function loadFonts() {
     await figma.loadFontAsync({ family: "Roboto", style: "Regular" });
 }
 
-async function buildNode(data: any): Promise<SceneNode | null> {
-    if (!data) return null;
+// Main Build Function
+async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: any) {
+    if (!data) return;
 
-    // --- 1. HANDLING IMAGES (Tag <img />) ---
+    let node: SceneNode;
+    const s = data.styles || {};
+
+    // --- 1. CREATE NODE BASED ON TYPE ---
     if (data.type === 'IMAGE') {
-        const node = figma.createRectangle();
-        node.name = 'Image';
-        if (data.styles) {
-            const s = data.styles;
-            if (s.width && s.height) node.resize(s.width, s.height);
+        const rect = figma.createRectangle();
+        rect.name = 'Image';
+        node = rect;
 
-            // Download Image
-            if (data.src) {
-                const imageBytes = await downloadImage(data.src);
-                if (imageBytes) {
-                    const imageHash = figma.createImage(imageBytes).hash;
-                    node.fills = [{ type: 'IMAGE', scaleMode: 'FILL', imageHash }];
-                }
+        // Download Image
+        if (data.src) {
+            const imageBytes = await downloadImage(data.src);
+            if (imageBytes) {
+                const imageHash = figma.createImage(imageBytes).hash;
+                rect.fills = [{ type: 'IMAGE', scaleMode: 'FILL', imageHash }];
             }
         }
-        return node;
+        // Size will be set later via resize/resizeWithoutConstraints
     }
-
-
-    // --- 2. HANDLING TEXT ---
-    if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
-        const node = figma.createText();
+    else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
+        const text = figma.createText();
+        node = text;
         await figma.loadFontAsync({ family: "Inter", style: "Regular" }); // Fallback
-        node.characters = data.content || "";
+        text.characters = data.content || "";
 
         // Apply text styles if available (simplified)
-        if (data.fontSize) node.fontSize = data.fontSize;
-        if (data.color) {
-            node.fills = [{ type: 'SOLID', color: data.color }];
+        if (s.fontSize) text.fontSize = s.fontSize;
+        if (s.color) {
+            text.fills = [{ type: 'SOLID', color: s.color }];
         }
-
-        // Position/Size if available (though AutoLayout usually handles this)
-        if (data.width) node.resize(data.width, data.height || data.fontSize * 1.5);
-
-        return node;
     }
+    else if (data.type === 'FRAME') {
+        const frame = figma.createFrame();
+        node = frame;
+        frame.name = data.tag || 'Frame';
 
-    // --- 3. HANDLING FRAMES (Divs, sections, etc) ---
-    if (data.type === 'FRAME') {
-        const node = figma.createFrame();
-        node.name = data.tag || 'Frame';
-
-        const s = data.styles || {};
-
-        // BACKGROUNDS (Solid & Image)
+        // Backgrounds
         const fills: Paint[] = [];
         if (s.backgroundColor) {
             fills.push({ type: 'SOLID', color: s.backgroundColor, opacity: s.opacity });
         }
         if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
-            // We can try to download background images too!
             const bgBytes = await downloadImage(s.backgroundImage.url);
             if (bgBytes) {
                 const bgHash = figma.createImage(bgBytes).hash;
                 fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: bgHash });
             }
         }
-        node.fills = fills.length > 0 ? fills : []; // Transparent if empty
-
+        frame.fills = fills.length > 0 ? fills : [];
 
         // Clipping
-        // Default to false (visible) unless explicitly hidden, which fixes "black frame" issues
-        // where container is smaller than content.
         if (s.overflowX === 'hidden' || s.overflowY === 'hidden') {
-            node.clipsContent = true;
+            frame.clipsContent = true;
         } else {
-            node.clipsContent = false;
+            frame.clipsContent = false;
         }
 
         // Radius
         if (s.borderRadius) {
-            node.topLeftRadius = s.borderRadius.topLeft || 0;
-            node.topRightRadius = s.borderRadius.topRight || 0;
-            node.bottomRightRadius = s.borderRadius.bottomRight || 0;
-            node.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
+            frame.topLeftRadius = s.borderRadius.topLeft || 0;
+            frame.topRightRadius = s.borderRadius.topRight || 0;
+            frame.bottomRightRadius = s.borderRadius.bottomRight || 0;
+            frame.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
+        }
+    } else {
+        // Unknown type
+        return;
+    }
+
+    // --- 2. COMMON SIZE & POSITION ---
+    // Size
+    if (s.width && s.height) {
+        node.resize(s.width, s.height);
+    }
+
+    // Append to parent BEFORE setting absolute positioning
+    // (Layout positioning requires parent)
+    if (parent.type !== 'PAGE' && parent.type !== 'DOCUMENT') {
+        (parent as FrameNode | GroupNode | ComponentNode).appendChild(node);
+    } else {
+        (parent as PageNode).appendChild(node);
+    }
+
+    // Positioning
+    const isAbsolute = s.position === 'absolute' || s.position === 'fixed';
+
+    if (isAbsolute) {
+        // Set Absolute Positioning
+        // Note: PAGE children are always absolute in Figma terms (x/y), 
+        // but Frame children depend on layout mode.
+        if (parent.type !== 'PAGE') {
+            node.layoutPositioning = 'ABSOLUTE';
         }
 
-        // --- POSITIONING: Absolute vs AutoLayout ---
-        const isAbsolute = s.position === 'absolute' || s.position === 'fixed';
-
-        if (isAbsolute) {
-            // For absolute nodes, we don't set AutoLayout on the node itself usually, 
-            // OR we set it but it will be placed absolutely inside its parent.
-            // Note: In Figma, layoutPositioning is set on the CHILD, not the parent.
-            // But we are creating the node here. 
-            // When we append this node to its parent later, we must set layoutPositioning.
-            // We'll store a meta property or just handle it after creation?
-            // Actually, we can set layoutPositioning 'ABSOLUTE' immediately if it has a parent? 
-            // No, it needs a parent first to be valid in some contexts, but let's try.
-            // Wait, we return the node here. The caller (parent recursion) appends it.
-            // So the PARENT loop needs to handle this?
-            // NO! We can set `node.layoutPositioning = "ABSOLUTE"` *after* it's appended.
-            // But we are inside the recursive buildNode.
-
-            // Strategy: We will proceed with AutoLayout config for the frame's *internal* children,
-            // but return a specific flag or just rely on the parent checking style data?
-            // Actually, `layoutPositioning` is a property of the node. We can set it.
-            // But it only applies if parent is AutoLayout.
-
-            // Let's set the frame size explicitly for absolute nodes
-            if (s.width && s.height) node.resize(s.width, s.height);
-
-            // We also need to Apply X/Y coordinates if absolute
+        // Calculate Coordinates
+        // If we have globalBounds for both, use the difference
+        if (data.globalBounds && parentData && parentData.globalBounds) {
+            node.x = data.globalBounds.x - parentData.globalBounds.x;
+            node.y = data.globalBounds.y - parentData.globalBounds.y;
+        } else {
+            // Fallback to CSS top/left
             node.x = s.left || 0;
             node.y = s.top || 0;
         }
+    } else {
+        // Static / AutoLayout
+        // We configure the parent's AutoLayout properties in the PARENT's type check,
+        // but here we are the child.
+        // If parent is a FRAME, we rely on parent's auto-layout settings to place this node.
+    }
 
-        // AutoLayout (If not absolute, or even if absolute, it can have auto-layout children)
+    // --- 3. FRAME SPECIFIC: AUTO LAYOUT CONFIG ---
+    if (data.type === 'FRAME' && node.type === 'FRAME') {
+        const frame = node;
         if (s.display === 'flex') {
-            node.layoutMode = s.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
-            node.itemSpacing = s.gap || 0;
-            node.paddingTop = s.padding?.top || 0;
-            node.paddingRight = s.padding?.right || 0;
-            node.paddingBottom = s.padding?.bottom || 0;
-            node.paddingLeft = s.padding?.left || 0;
+            frame.layoutMode = s.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
+            frame.itemSpacing = s.gap || 0;
+            frame.paddingTop = s.padding?.top || 0;
+            frame.paddingRight = s.padding?.right || 0;
+            frame.paddingBottom = s.padding?.bottom || 0;
+            frame.paddingLeft = s.padding?.left || 0;
 
             // Alignment
             switch (s.alignItems) {
-                case 'center': node.counterAxisAlignItems = 'CENTER'; break;
-                case 'flex-end': node.counterAxisAlignItems = 'MAX'; break;
-                default: node.counterAxisAlignItems = 'MIN';
+                case 'center': frame.counterAxisAlignItems = 'CENTER'; break;
+                case 'flex-end': frame.counterAxisAlignItems = 'MAX'; break;
+                default: frame.counterAxisAlignItems = 'MIN';
             }
             switch (s.justifyContent) {
-                case 'center': node.primaryAxisAlignItems = 'CENTER'; break;
-                case 'space-between': node.primaryAxisAlignItems = 'SPACE_BETWEEN'; break;
-                case 'flex-end': node.primaryAxisAlignItems = 'MAX'; break;
-                default: node.primaryAxisAlignItems = 'MIN';
+                case 'center': frame.primaryAxisAlignItems = 'CENTER'; break;
+                case 'space-between': frame.primaryAxisAlignItems = 'SPACE_BETWEEN'; break;
+                case 'flex-end': frame.primaryAxisAlignItems = 'MAX'; break;
+                default: frame.primaryAxisAlignItems = 'MIN';
             }
         } else {
-            // Block Layout default
-            node.layoutMode = 'VERTICAL';
+            // Block layout -> Vertical AutoLayout
+            frame.layoutMode = 'VERTICAL';
         }
-
-
-        // Children
-        if (data.children) {
-            for (const childData of data.children) {
-                const childNode = await buildNode(childData);
-                if (childNode) {
-                    node.appendChild(childNode);
-
-                    // Check if child should be absolute
-                    // We need to look at childData.styles.position
-                    if (childData.styles && (childData.styles.position === 'absolute' || childData.styles.position === 'fixed')) {
-                        if ('layoutPositioning' in childNode) {
-                            (childNode as any).layoutPositioning = 'ABSOLUTE';
-                        }
-                        childNode.x = childData.styles.left || 0;
-                        childNode.y = childData.styles.top || 0;
-
-                        // Fix constraints?
-                        // childNode.constraints = { horizontal: 'MIN', vertical: 'MIN' };
-                    }
-                }
-            }
-        }
-
-        return node;
     }
 
-    return null;
+    // --- 4. RECURSION ---
+    if (data.children) {
+        for (const childData of data.children) {
+            await buildNode(childData, node, data);
+        }
+    }
+
+    return node;
 }

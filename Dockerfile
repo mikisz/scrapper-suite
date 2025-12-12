@@ -33,4 +33,7 @@ RUN chown -R pptruser:pptruser /app
 USER pptruser
 
 # Start the application
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+
 CMD ["npm", "start"]

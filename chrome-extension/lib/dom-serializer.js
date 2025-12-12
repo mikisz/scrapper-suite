@@ -159,6 +159,7 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
             return {
                 type: 'FRAME',
                 tag: el.tagName.toLowerCase(),
+                globalBounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, // New: used for absolute positioning calculation
                 styles,
                 children,
             };

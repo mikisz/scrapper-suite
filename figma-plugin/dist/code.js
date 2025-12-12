@@ -35,7 +35,6 @@ var __async = (__this, __arguments, generator) => {
     });
   }
   const pendingImages = {};
-  figma.ui.onmessage;
   figma.ui.onmessage = (msg) => __async(this, null, function* () {
     if (msg.type === "image-data") {
       const resolver = pendingImages[msg.id];
@@ -45,11 +44,7 @@ var __async = (__this, __arguments, generator) => {
     if (msg.type === "build") {
       const rootData = msg.data;
       yield loadFonts();
-      const frame = yield buildNode(rootData);
-      if (frame) {
-        figma.currentPage.appendChild(frame);
-        figma.viewport.scrollAndZoomIntoView([frame]);
-      }
+      yield buildNode(rootData, figma.currentPage, void 0);
       figma.ui.postMessage({ type: "done" });
     }
   });
@@ -60,41 +55,36 @@ var __async = (__this, __arguments, generator) => {
       yield figma.loadFontAsync({ family: "Roboto", style: "Regular" });
     });
   }
-  function buildNode(data) {
+  function buildNode(data, parent, parentData) {
     return __async(this, null, function* () {
       var _a, _b, _c, _d;
-      if (!data) return null;
+      if (!data) return;
+      let node;
+      const s = data.styles || {};
       if (data.type === "IMAGE") {
-        const node = figma.createRectangle();
-        node.name = "Image";
-        if (data.styles) {
-          const s = data.styles;
-          if (s.width && s.height) node.resize(s.width, s.height);
-          if (data.src) {
-            const imageBytes = yield downloadImage(data.src);
-            if (imageBytes) {
-              const imageHash = figma.createImage(imageBytes).hash;
-              node.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash }];
-            }
+        const rect = figma.createRectangle();
+        rect.name = "Image";
+        node = rect;
+        if (data.src) {
+          const imageBytes = yield downloadImage(data.src);
+          if (imageBytes) {
+            const imageHash = figma.createImage(imageBytes).hash;
+            rect.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash }];
           }
         }
-        return node;
-      }
-      if (data.type === "TEXT_NODE" || data.type === "TEXT" && data.content) {
-        const node = figma.createText();
+      } else if (data.type === "TEXT_NODE" || data.type === "TEXT" && data.content) {
+        const text = figma.createText();
+        node = text;
         yield figma.loadFontAsync({ family: "Inter", style: "Regular" });
-        node.characters = data.content || "";
-        if (data.fontSize) node.fontSize = data.fontSize;
-        if (data.color) {
-          node.fills = [{ type: "SOLID", color: data.color }];
+        text.characters = data.content || "";
+        if (s.fontSize) text.fontSize = s.fontSize;
+        if (s.color) {
+          text.fills = [{ type: "SOLID", color: s.color }];
         }
-        if (data.width) node.resize(data.width, data.height || data.fontSize * 1.5);
-        return node;
-      }
-      if (data.type === "FRAME") {
-        const node = figma.createFrame();
-        node.name = data.tag || "Frame";
-        const s = data.styles || {};
+      } else if (data.type === "FRAME") {
+        const frame = figma.createFrame();
+        node = frame;
+        frame.name = data.tag || "Frame";
         const fills = [];
         if (s.backgroundColor) {
           fills.push({ type: "SOLID", color: s.backgroundColor, opacity: s.opacity });
@@ -106,75 +96,84 @@ var __async = (__this, __arguments, generator) => {
             fills.push({ type: "IMAGE", scaleMode: "FILL", imageHash: bgHash });
           }
         }
-        node.fills = fills.length > 0 ? fills : [];
+        frame.fills = fills.length > 0 ? fills : [];
         if (s.overflowX === "hidden" || s.overflowY === "hidden") {
-          node.clipsContent = true;
+          frame.clipsContent = true;
         } else {
-          node.clipsContent = false;
+          frame.clipsContent = false;
         }
         if (s.borderRadius) {
-          node.topLeftRadius = s.borderRadius.topLeft || 0;
-          node.topRightRadius = s.borderRadius.topRight || 0;
-          node.bottomRightRadius = s.borderRadius.bottomRight || 0;
-          node.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
+          frame.topLeftRadius = s.borderRadius.topLeft || 0;
+          frame.topRightRadius = s.borderRadius.topRight || 0;
+          frame.bottomRightRadius = s.borderRadius.bottomRight || 0;
+          frame.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
         }
-        const isAbsolute = s.position === "absolute" || s.position === "fixed";
-        if (isAbsolute) {
-          if (s.width && s.height) node.resize(s.width, s.height);
+      } else {
+        return;
+      }
+      if (s.width && s.height) {
+        node.resize(s.width, s.height);
+      }
+      if (parent.type !== "PAGE" && parent.type !== "DOCUMENT") {
+        parent.appendChild(node);
+      } else {
+        parent.appendChild(node);
+      }
+      const isAbsolute = s.position === "absolute" || s.position === "fixed";
+      if (isAbsolute) {
+        if (parent.type !== "PAGE") {
+          node.layoutPositioning = "ABSOLUTE";
+        }
+        if (data.globalBounds && parentData && parentData.globalBounds) {
+          node.x = data.globalBounds.x - parentData.globalBounds.x;
+          node.y = data.globalBounds.y - parentData.globalBounds.y;
+        } else {
           node.x = s.left || 0;
           node.y = s.top || 0;
         }
+      }
+      if (data.type === "FRAME" && node.type === "FRAME") {
+        const frame = node;
         if (s.display === "flex") {
-          node.layoutMode = s.flexDirection === "row" ? "HORIZONTAL" : "VERTICAL";
-          node.itemSpacing = s.gap || 0;
-          node.paddingTop = ((_a = s.padding) == null ? void 0 : _a.top) || 0;
-          node.paddingRight = ((_b = s.padding) == null ? void 0 : _b.right) || 0;
-          node.paddingBottom = ((_c = s.padding) == null ? void 0 : _c.bottom) || 0;
-          node.paddingLeft = ((_d = s.padding) == null ? void 0 : _d.left) || 0;
+          frame.layoutMode = s.flexDirection === "row" ? "HORIZONTAL" : "VERTICAL";
+          frame.itemSpacing = s.gap || 0;
+          frame.paddingTop = ((_a = s.padding) == null ? void 0 : _a.top) || 0;
+          frame.paddingRight = ((_b = s.padding) == null ? void 0 : _b.right) || 0;
+          frame.paddingBottom = ((_c = s.padding) == null ? void 0 : _c.bottom) || 0;
+          frame.paddingLeft = ((_d = s.padding) == null ? void 0 : _d.left) || 0;
           switch (s.alignItems) {
             case "center":
-              node.counterAxisAlignItems = "CENTER";
+              frame.counterAxisAlignItems = "CENTER";
               break;
             case "flex-end":
-              node.counterAxisAlignItems = "MAX";
+              frame.counterAxisAlignItems = "MAX";
               break;
             default:
-              node.counterAxisAlignItems = "MIN";
+              frame.counterAxisAlignItems = "MIN";
           }
           switch (s.justifyContent) {
             case "center":
-              node.primaryAxisAlignItems = "CENTER";
+              frame.primaryAxisAlignItems = "CENTER";
               break;
             case "space-between":
-              node.primaryAxisAlignItems = "SPACE_BETWEEN";
+              frame.primaryAxisAlignItems = "SPACE_BETWEEN";
               break;
             case "flex-end":
-              node.primaryAxisAlignItems = "MAX";
+              frame.primaryAxisAlignItems = "MAX";
               break;
             default:
-              node.primaryAxisAlignItems = "MIN";
+              frame.primaryAxisAlignItems = "MIN";
           }
         } else {
-          node.layoutMode = "VERTICAL";
+          frame.layoutMode = "VERTICAL";
         }
-        if (data.children) {
-          for (const childData of data.children) {
-            const childNode = yield buildNode(childData);
-            if (childNode) {
-              node.appendChild(childNode);
-              if (childData.styles && (childData.styles.position === "absolute" || childData.styles.position === "fixed")) {
-                if ("layoutPositioning" in childNode) {
-                  childNode.layoutPositioning = "ABSOLUTE";
-                }
-                childNode.x = childData.styles.left || 0;
-                childNode.y = childData.styles.top || 0;
-              }
-            }
-          }
-        }
-        return node;
       }
-      return null;
+      if (data.children) {
+        for (const childData of data.children) {
+          yield buildNode(childData, node, data);
+        }
+      }
+      return node;
     });
   }
 })();
