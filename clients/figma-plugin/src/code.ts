@@ -62,10 +62,17 @@ function extractImageUrls(node: any, urls: Set<string>): void {
         urls.add(node.src);
     }
     
-    // Background images
+    // Background images (from styles or pseudo-elements)
     const styles = node.styles || {};
     if (styles.backgroundImage && styles.backgroundImage.type === 'IMAGE' && styles.backgroundImage.url) {
         urls.add(styles.backgroundImage.url);
+    }
+    
+    // Pseudo-elements with background images
+    if (node.type === 'PSEUDO_ELEMENT' && node.contentType === 'IMAGE') {
+        if (styles.backgroundImage && styles.backgroundImage.url) {
+            urls.add(styles.backgroundImage.url);
+        }
     }
     
     // Recurse through children
@@ -238,6 +245,13 @@ function extractFonts(node: any, fonts: Set<string>): void {
     
     const styles = node.styles || node;
     if (styles.fontFamily) {
+        const family = parseFontFamily(styles.fontFamily);
+        const weight = styles.fontWeight || '400';
+        fonts.add(`${family}:${weight}`);
+    }
+    
+    // Handle pseudo-elements with text content
+    if (node.type === 'PSEUDO_ELEMENT' && node.contentType === 'TEXT' && styles.fontFamily) {
         const family = parseFontFamily(styles.fontFamily);
         const weight = styles.fontWeight || '400';
         fonts.add(`${family}:${weight}`);
@@ -467,7 +481,32 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     const s = data.styles || {};
 
     // --- 1. CREATE NODE BASED ON TYPE ---
-    if (data.type === 'IMAGE') {
+    if (data.type === 'VECTOR') {
+        // SVG element - create editable vector from SVG string
+        try {
+            const svgNode = figma.createNodeFromSvg(data.svgString);
+            svgNode.name = 'SVG';
+            node = svgNode;
+
+            // Apply size from styles if available
+            if (s.width && s.height && s.width > 0 && s.height > 0) {
+                svgNode.resize(s.width, s.height);
+            }
+
+            // Apply shadows if present
+            if (s.boxShadow) {
+                svgNode.effects = parseBoxShadow(s.boxShadow);
+            }
+        } catch (e) {
+            // Fallback: If SVG parsing fails, create a placeholder rectangle
+            console.warn('Failed to parse SVG, creating placeholder:', e);
+            const rect = figma.createRectangle();
+            rect.name = 'SVG (failed to parse)';
+            rect.fills = [{ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } }];
+            node = rect;
+        }
+    }
+    else if (data.type === 'IMAGE') {
         const rect = figma.createRectangle();
         rect.name = 'Image';
         node = rect;
@@ -486,6 +525,75 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             node.effects = parseBoxShadow(s.boxShadow);
         }
 
+    }
+    else if (data.type === 'PSEUDO_ELEMENT') {
+        // Handle CSS pseudo-elements (::before/::after)
+        const pseudoName = data.pseudo === '::before' ? 'Before' : 'After';
+        
+        if (data.contentType === 'TEXT' && data.content) {
+            // Text pseudo-element
+            const text = figma.createText();
+            node = text;
+            text.name = `::${pseudoName.toLowerCase()}`;
+            
+            // Load font with fallback
+            const fontFamily = parseFontFamily(s.fontFamily);
+            const fontWeight = s.fontWeight || '400';
+            const loadedFont = await tryLoadFont(fontFamily, fontWeight);
+            text.fontName = loadedFont;
+            
+            text.characters = data.content;
+            
+            if (s.fontSize) text.fontSize = s.fontSize;
+            if (s.color) {
+                text.fills = [{ type: 'SOLID', color: s.color }];
+            }
+            if (s.boxShadow) {
+                text.effects = parseBoxShadow(s.boxShadow);
+            }
+        } else {
+            // Decorative or image pseudo-element - create a frame
+            const frame = figma.createFrame();
+            frame.name = `::${pseudoName.toLowerCase()}`;
+            node = frame;
+            
+            // Apply background
+            const fills: Paint[] = [];
+            if (s.backgroundColor) {
+                fills.push({ type: 'SOLID', color: s.backgroundColor, opacity: s.opacity });
+            }
+            if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
+                const bgBytes = imageCache.get(s.backgroundImage.url);
+                if (bgBytes) {
+                    const bgHash = figma.createImage(bgBytes).hash;
+                    fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: bgHash });
+                }
+            } else if (s.backgroundImage && s.backgroundImage.type === 'GRADIENT') {
+                const gradient = parseGradient(s.backgroundImage.raw);
+                if (gradient) fills.push(gradient);
+            }
+            frame.fills = fills.length > 0 ? fills : [];
+            
+            // Apply border radius
+            if (s.borderRadius) {
+                frame.topLeftRadius = s.borderRadius.topLeft || 0;
+                frame.topRightRadius = s.borderRadius.topRight || 0;
+                frame.bottomRightRadius = s.borderRadius.bottomRight || 0;
+                frame.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
+            }
+            
+            // Apply shadows
+            if (s.boxShadow) {
+                frame.effects = parseBoxShadow(s.boxShadow);
+            }
+            
+            // Apply borders
+            if (s.border && s.border.width > 0 && s.border.color) {
+                frame.strokes = [{ type: 'SOLID', color: s.border.color }];
+                frame.strokeWeight = s.border.width;
+                frame.strokeAlign = 'INSIDE';
+            }
+        }
     }
     else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
         const text = figma.createText();

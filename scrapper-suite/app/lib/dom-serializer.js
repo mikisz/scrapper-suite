@@ -51,6 +51,117 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
         return null;
     }
 
+    // Helper to extract pseudo-element (::before/::after)
+    function getPseudoElement(el, pseudo) {
+        // Note: Some environments (like JSDOM) don't support getComputedStyle with pseudo-elements
+        let computed;
+        try {
+            computed = window.getComputedStyle(el, pseudo);
+        } catch (e) {
+            return null; // Environment doesn't support pseudo-element styles
+        }
+        
+        // Check if getComputedStyle returned null or is missing content property
+        if (!computed || !computed.content) {
+            return null;
+        }
+        
+        const content = computed.content;
+        
+        // Skip if no content or 'none'
+        if (!content || content === 'none' || content === 'normal' || content === '""' || content === "''") {
+            return null;
+        }
+
+        // Check if the pseudo-element is visible
+        if (computed.display === 'none' || computed.visibility === 'hidden' || computed.opacity === '0') {
+            return null;
+        }
+
+        // Extract the actual text content (removing quotes)
+        let textContent = content;
+        if (content.startsWith('"') && content.endsWith('"')) {
+            textContent = content.slice(1, -1);
+        } else if (content.startsWith("'") && content.endsWith("'")) {
+            textContent = content.slice(1, -1);
+        }
+
+        // Get dimensions - pseudo-elements don't have getBoundingClientRect, 
+        // so we estimate from computed styles
+        const width = parseUnit(computed.width) || 0;
+        const height = parseUnit(computed.height) || 0;
+
+        // Check for background image (common for icon pseudo-elements)
+        const bgImage = getBackground(computed);
+        
+        // If there's a background image but empty text, it's likely an icon pseudo-element
+        const hasBackgroundContent = bgImage && bgImage.type === 'IMAGE';
+        
+        // Skip if no visual content at all
+        if (!textContent && !hasBackgroundContent && width === 0 && height === 0) {
+            return null;
+        }
+
+        const pseudoStyles = {
+            width: width || parseUnit(computed.inlineSize) || 'auto',
+            height: height || parseUnit(computed.blockSize) || 'auto',
+            display: computed.display,
+            position: computed.position,
+            top: parseUnit(computed.top),
+            left: parseUnit(computed.left),
+            right: parseUnit(computed.right),
+            bottom: parseUnit(computed.bottom),
+            zIndex: computed.zIndex === 'auto' ? 0 : parseInt(computed.zIndex),
+            backgroundColor: getRgb(computed.backgroundColor),
+            backgroundImage: bgImage,
+            borderRadius: {
+                topLeft: parseUnit(computed.borderTopLeftRadius),
+                topRight: parseUnit(computed.borderTopRightRadius),
+                bottomRight: parseUnit(computed.borderBottomRightRadius),
+                bottomLeft: parseUnit(computed.borderBottomLeftRadius),
+            },
+            color: getRgb(computed.color),
+            fontSize: parseUnit(computed.fontSize),
+            fontWeight: computed.fontWeight,
+            fontFamily: computed.fontFamily,
+            opacity: parseFloat(computed.opacity) || 1,
+            border: {
+                width: parseUnit(computed.borderWidth),
+                color: getRgb(computed.borderColor),
+                style: computed.borderStyle
+            },
+            boxShadow: computed.boxShadow !== 'none' ? computed.boxShadow : null,
+        };
+
+        // Determine the type based on content
+        if (textContent && textContent.trim()) {
+            return {
+                type: 'PSEUDO_ELEMENT',
+                pseudo: pseudo,
+                contentType: 'TEXT',
+                content: textContent,
+                styles: pseudoStyles,
+            };
+        } else if (hasBackgroundContent) {
+            return {
+                type: 'PSEUDO_ELEMENT',
+                pseudo: pseudo,
+                contentType: 'IMAGE',
+                styles: pseudoStyles,
+            };
+        } else if (width > 0 && height > 0) {
+            // Decorative element (colored box, shape, etc.)
+            return {
+                type: 'PSEUDO_ELEMENT',
+                pseudo: pseudo,
+                contentType: 'DECORATIVE',
+                styles: pseudoStyles,
+            };
+        }
+
+        return null;
+    }
+
     function analyzeNode(node) {
         if (node.nodeType === Node.TEXT_NODE) {
             const textContent = node.textContent?.trim();
@@ -140,16 +251,16 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 };
             }
 
-            // Handling SVGs specific optimization:
-            // Since parsing SVG paths to vector nodes is very complex, we will render them as images.
-            if (el.tagName === 'SVG') {
+            // Handling SVGs: Extract as editable vector data
+            // Note: tagName can be uppercase or lowercase depending on the document type
+            if (el.tagName.toUpperCase() === 'SVG') {
                 const s = new XMLSerializer();
-                const str = s.serializeToString(el);
-                const base64 = window.btoa(unescape(encodeURIComponent(str)));
-                const dataUri = `data:image/svg+xml;base64,${base64}`;
+                const svgString = s.serializeToString(el);
+                
+                // Return as VECTOR type with raw SVG string for Figma's createNodeFromSvg
                 return {
-                    type: 'IMAGE',
-                    src: dataUri,
+                    type: 'VECTOR',
+                    svgString: svgString,
                     styles,
                     tag: 'svg'
                 };
@@ -172,10 +283,26 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
             }
 
             const children = [];
+
+            // 3. Pseudo-element Support (::before)
+            // Extract ::before pseudo-element if present - it renders BEFORE child content
+            const beforePseudo = getPseudoElement(el, '::before');
+            if (beforePseudo) {
+                children.push(beforePseudo);
+            }
+
+            // Regular children
             childNodesArray.forEach(child => {
                 const result = analyzeNode(child);
                 if (result) children.push(result);
             });
+
+            // 4. Pseudo-element Support (::after)
+            // Extract ::after pseudo-element if present - it renders AFTER child content
+            const afterPseudo = getPseudoElement(el, '::after');
+            if (afterPseudo) {
+                children.push(afterPseudo);
+            }
 
             // Special optimization: Text Container leaf
             if (children.length === 1 && children[0].type === 'TEXT') {
