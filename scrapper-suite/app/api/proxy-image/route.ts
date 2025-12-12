@@ -1,5 +1,5 @@
-
 import { NextRequest, NextResponse } from 'next/server';
+import { validateImageUrl } from '@/app/lib/validation';
 
 export const dynamic = 'force-dynamic'; // Prevent static caching
 
@@ -7,12 +7,17 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const url = searchParams.get('url');
 
-    if (!url) {
-        return NextResponse.json({ error: 'URL is required' }, { status: 400 });
+    // Validate URL format and security
+    const validation = validateImageUrl(url || '');
+    if (!validation.valid) {
+        return NextResponse.json({ error: validation.error }, { status: 400 });
     }
 
+    // URL is guaranteed to be valid after validation
+    const validatedUrl = url as string;
+
     try {
-        const response = await fetch(url, {
+        const response = await fetch(validatedUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }

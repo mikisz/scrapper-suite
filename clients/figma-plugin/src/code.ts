@@ -1,7 +1,25 @@
 /// <reference types="@figma/plugin-typings" />
 
-figma.showUI(__html__, { width: 300, height: 400 });
+figma.showUI(__html__, { width: 300, height: 450 });
 
+// Progress tracking
+let totalNodes = 0;
+let processedNodes = 0;
+
+function sendProgress(stage: string, percent: number | null = null, detail: string = '', status: string = '') {
+    figma.ui.postMessage({ type: 'progress', stage, percent, detail, status });
+}
+
+function countNodes(data: any): number {
+    if (!data) return 0;
+    let count = 1;
+    if (data.children) {
+        for (const child of data.children) {
+            count += countNodes(child);
+        }
+    }
+    return count;
+}
 
 // Helper to request image from UI and wait for response
 function downloadImage(url: string): Promise<Uint8Array | null> {
@@ -46,10 +64,17 @@ figma.ui.onmessage = async (msg) => {
     // Original Logic
     if (msg.type === 'build') {
         const rootData = msg.data;
+        
+        // Count total nodes for progress tracking
+        totalNodes = countNodes(rootData);
+        processedNodes = 0;
+        
+        sendProgress('Loading fonts', 25, '', 'Preparing fonts...');
         await loadFonts(rootData);
-        // Create a temporary frame or just append to page?
-        // Let's create the root node directly on page
+        
+        sendProgress('Building layout', 30, `0/${totalNodes} nodes`, 'Creating Figma layers...');
         await buildNode(rootData, figma.currentPage, undefined);
+        
         figma.ui.postMessage({ type: 'done' });
     }
 };
@@ -260,40 +285,95 @@ function getTextDecoration(decoration: string): TextDecoration {
     return 'NONE';
 }
 
+// --- HELPER: Parse Gradient Angle ---
+function parseGradientAngle(gradientStr: string): number {
+    // Default: 180deg (top to bottom) - CSS default for linear-gradient
+    let angle = 180;
+    
+    // Match explicit angle: "linear-gradient(45deg, ..."
+    const degMatch = gradientStr.match(/linear-gradient\(\s*(-?\d+(?:\.\d+)?)\s*deg/i);
+    if (degMatch) {
+        angle = parseFloat(degMatch[1]);
+        return angle;
+    }
+    
+    // Match direction keywords: "linear-gradient(to right, ..."
+    const dirMatch = gradientStr.match(/linear-gradient\(\s*to\s+([^,]+)/i);
+    if (dirMatch) {
+        const direction = dirMatch[1].trim().toLowerCase();
+        
+        // Single directions
+        if (direction === 'top') return 0;
+        if (direction === 'right') return 90;
+        if (direction === 'bottom') return 180;
+        if (direction === 'left') return 270;
+        
+        // Corner directions
+        if (direction === 'top right' || direction === 'right top') return 45;
+        if (direction === 'bottom right' || direction === 'right bottom') return 135;
+        if (direction === 'bottom left' || direction === 'left bottom') return 225;
+        if (direction === 'top left' || direction === 'left top') return 315;
+    }
+    
+    return angle;
+}
+
+// --- HELPER: Convert CSS angle to Figma gradient transform ---
+function angleToGradientTransform(angleDeg: number): Transform {
+    // CSS angles: 0deg = to top, 90deg = to right, 180deg = to bottom
+    // Convert to radians and adjust for Figma's coordinate system
+    const angleRad = (angleDeg - 90) * (Math.PI / 180);
+    
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    
+    // Figma gradient transform is a 2x3 matrix that defines the gradient line
+    // The gradient goes from (0,0) to (1,0) in transformed space
+    // We need to map this to the actual angle in the node's space
+    return [
+        [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+        [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+    ];
+}
+
 // --- HELPER: Parse Gradient ---
 function parseGradient(gradientStr: string): GradientPaint | null {
     if (!gradientStr || !gradientStr.includes('linear-gradient')) return null;
 
-    // Simplified Gradient Parsing
-    // CSS: linear-gradient(deg, color stop, color stop)
-    // Figma: GradientPaint... 
+    // 1. Parse angle
+    const angle = parseGradientAngle(gradientStr);
+    const transform = angleToGradientTransform(angle);
 
-    // 1. Extract Colors
+    // 2. Extract Colors
     // Regex matches rgba?(...) or #...
     const colors: RGB[] = [];
-    const colorMatches = gradientStr.match(/rgba?\(.*?\)|#[a-fA-F0-9]{3,6}/g);
+    const colorMatches = gradientStr.match(/rgba?\(.*?\)|#[a-fA-F0-9]{3,8}/g);
 
     if (colorMatches && colorMatches.length >= 2) {
-        colorMatches.slice(0, 3).forEach(c => { // Limit to 3 stops for simplicity
+        colorMatches.forEach(c => {
             // Parse Color
-            let r = 0, g = 0, b = 0, a = 1;
+            let r = 0, g = 0, b = 0;
             if (c.startsWith('rgba')) {
                 const nums = c.match(/[\d.]+/g)?.map(Number);
                 if (nums && nums.length >= 3) {
-                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255; a = nums[3] ?? 1;
+                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255;
                 }
             } else if (c.startsWith('rgb')) {
                 const nums = c.match(/[\d.]+/g)?.map(Number);
                 if (nums && nums.length >= 3) {
-                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255; a = 1;
+                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255;
                 }
             } else if (c.startsWith('#')) {
-                // hex parsing placeholder, default to mid-grey if fail
-                // actually lets support hex roughly
-                if (c.length === 7) {
-                    r = parseInt(c.slice(1, 3), 16) / 255;
-                    g = parseInt(c.slice(3, 5), 16) / 255;
-                    b = parseInt(c.slice(5, 7), 16) / 255;
+                // Support both #RGB, #RRGGBB, and #RRGGBBAA
+                const hex = c.slice(1);
+                if (hex.length === 3) {
+                    r = parseInt(hex[0] + hex[0], 16) / 255;
+                    g = parseInt(hex[1] + hex[1], 16) / 255;
+                    b = parseInt(hex[2] + hex[2], 16) / 255;
+                } else if (hex.length >= 6) {
+                    r = parseInt(hex.slice(0, 2), 16) / 255;
+                    g = parseInt(hex.slice(2, 4), 16) / 255;
+                    b = parseInt(hex.slice(4, 6), 16) / 255;
                 }
             }
             colors.push({ r, g, b });
@@ -302,17 +382,16 @@ function parseGradient(gradientStr: string): GradientPaint | null {
 
     if (colors.length < 2) return null;
 
-    // Construct Gradient Stops
+    // 3. Construct Gradient Stops
     const stops: ColorStop[] = colors.map((c, i) => ({
         position: i / (colors.length - 1),
-        color: { ...c, a: 1 } // Figma alpha usually 1 for gradient stops unless transparent gradient
+        color: { ...c, a: 1 }
     }));
 
-    // TODO: Parse angle to set handle positions. Defaulting to Top-Bottom.
     return {
         type: 'GRADIENT_LINEAR',
         gradientStops: stops,
-        gradientTransform: [[0, 1, 0], [-1, 0, 1]] // 90deg rotation approximately
+        gradientTransform: transform
     };
 }
 
@@ -321,7 +400,12 @@ function parseGradient(gradientStr: string): GradientPaint | null {
 async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: any) {
     if (!data) return;
 
-    // ... (Image logic)
+    // Update progress
+    processedNodes++;
+    if (processedNodes % 10 === 0 || processedNodes === totalNodes) {
+        const percent = 30 + Math.round((processedNodes / totalNodes) * 65);
+        sendProgress('Building layout', percent, `${processedNodes}/${totalNodes} nodes`);
+    }
 
     let node: SceneNode;
     const s = data.styles || {};

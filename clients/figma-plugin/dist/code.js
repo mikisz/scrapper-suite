@@ -39,7 +39,22 @@ var __async = (__this, __arguments, generator) => {
 };
 (function() {
   "use strict";
-  figma.showUI(__html__, { width: 300, height: 400 });
+  figma.showUI(__html__, { width: 300, height: 450 });
+  let totalNodes = 0;
+  let processedNodes = 0;
+  function sendProgress(stage, percent = null, detail = "", status = "") {
+    figma.ui.postMessage({ type: "progress", stage, percent, detail, status });
+  }
+  function countNodes(data) {
+    if (!data) return 0;
+    let count = 1;
+    if (data.children) {
+      for (const child of data.children) {
+        count += countNodes(child);
+      }
+    }
+    return count;
+  }
   function downloadImage(url) {
     return new Promise((resolve) => {
       const id = Math.random().toString(36).substring(7);
@@ -62,7 +77,11 @@ var __async = (__this, __arguments, generator) => {
     }
     if (msg.type === "build") {
       const rootData = msg.data;
+      totalNodes = countNodes(rootData);
+      processedNodes = 0;
+      sendProgress("Loading fonts", 25, "", "Preparing fonts...");
       yield loadFonts(rootData);
+      sendProgress("Building layout", 30, `0/${totalNodes} nodes`, "Creating Figma layers...");
       yield buildNode(rootData, figma.currentPage, void 0);
       figma.ui.postMessage({ type: "done" });
     }
@@ -212,13 +231,45 @@ var __async = (__this, __arguments, generator) => {
     if (decoration && decoration.includes("line-through")) return "STRIKETHROUGH";
     return "NONE";
   }
+  function parseGradientAngle(gradientStr) {
+    let angle = 180;
+    const degMatch = gradientStr.match(/linear-gradient\(\s*(-?\d+(?:\.\d+)?)\s*deg/i);
+    if (degMatch) {
+      angle = parseFloat(degMatch[1]);
+      return angle;
+    }
+    const dirMatch = gradientStr.match(/linear-gradient\(\s*to\s+([^,]+)/i);
+    if (dirMatch) {
+      const direction = dirMatch[1].trim().toLowerCase();
+      if (direction === "top") return 0;
+      if (direction === "right") return 90;
+      if (direction === "bottom") return 180;
+      if (direction === "left") return 270;
+      if (direction === "top right" || direction === "right top") return 45;
+      if (direction === "bottom right" || direction === "right bottom") return 135;
+      if (direction === "bottom left" || direction === "left bottom") return 225;
+      if (direction === "top left" || direction === "left top") return 315;
+    }
+    return angle;
+  }
+  function angleToGradientTransform(angleDeg) {
+    const angleRad = (angleDeg - 90) * (Math.PI / 180);
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    return [
+      [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+      [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+    ];
+  }
   function parseGradient(gradientStr) {
     if (!gradientStr || !gradientStr.includes("linear-gradient")) return null;
+    const angle = parseGradientAngle(gradientStr);
+    const transform = angleToGradientTransform(angle);
     const colors = [];
-    const colorMatches = gradientStr.match(/rgba?\(.*?\)|#[a-fA-F0-9]{3,6}/g);
+    const colorMatches = gradientStr.match(/rgba?\(.*?\)|#[a-fA-F0-9]{3,8}/g);
     if (colorMatches && colorMatches.length >= 2) {
-      colorMatches.slice(0, 3).forEach((c) => {
-        var _a, _b, _c;
+      colorMatches.forEach((c) => {
+        var _a, _b;
         let r = 0, g = 0, b = 0;
         if (c.startsWith("rgba")) {
           const nums = (_a = c.match(/[\d.]+/g)) == null ? void 0 : _a.map(Number);
@@ -226,20 +277,24 @@ var __async = (__this, __arguments, generator) => {
             r = nums[0] / 255;
             g = nums[1] / 255;
             b = nums[2] / 255;
-            (_b = nums[3]) != null ? _b : 1;
           }
         } else if (c.startsWith("rgb")) {
-          const nums = (_c = c.match(/[\d.]+/g)) == null ? void 0 : _c.map(Number);
+          const nums = (_b = c.match(/[\d.]+/g)) == null ? void 0 : _b.map(Number);
           if (nums && nums.length >= 3) {
             r = nums[0] / 255;
             g = nums[1] / 255;
             b = nums[2] / 255;
           }
         } else if (c.startsWith("#")) {
-          if (c.length === 7) {
-            r = parseInt(c.slice(1, 3), 16) / 255;
-            g = parseInt(c.slice(3, 5), 16) / 255;
-            b = parseInt(c.slice(5, 7), 16) / 255;
+          const hex = c.slice(1);
+          if (hex.length === 3) {
+            r = parseInt(hex[0] + hex[0], 16) / 255;
+            g = parseInt(hex[1] + hex[1], 16) / 255;
+            b = parseInt(hex[2] + hex[2], 16) / 255;
+          } else if (hex.length >= 6) {
+            r = parseInt(hex.slice(0, 2), 16) / 255;
+            g = parseInt(hex.slice(2, 4), 16) / 255;
+            b = parseInt(hex.slice(4, 6), 16) / 255;
           }
         }
         colors.push({ r, g, b });
@@ -249,19 +304,22 @@ var __async = (__this, __arguments, generator) => {
     const stops = colors.map((c, i) => ({
       position: i / (colors.length - 1),
       color: __spreadProps(__spreadValues({}, c), { a: 1 })
-      // Figma alpha usually 1 for gradient stops unless transparent gradient
     }));
     return {
       type: "GRADIENT_LINEAR",
       gradientStops: stops,
-      gradientTransform: [[0, 1, 0], [-1, 0, 1]]
-      // 90deg rotation approximately
+      gradientTransform: transform
     };
   }
   function buildNode(data, parent, parentData) {
     return __async(this, null, function* () {
       var _a, _b, _c, _d;
       if (!data) return;
+      processedNodes++;
+      if (processedNodes % 10 === 0 || processedNodes === totalNodes) {
+        const percent = 30 + Math.round(processedNodes / totalNodes * 65);
+        sendProgress("Building layout", percent, `${processedNodes}/${totalNodes} nodes`);
+      }
       let node;
       const s = data.styles || {};
       if (data.type === "IMAGE") {

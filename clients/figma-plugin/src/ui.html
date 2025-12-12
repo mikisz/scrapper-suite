@@ -126,6 +126,50 @@
     .success {
       color: #00e676 !important;
     }
+
+    /* Progress bar styles */
+    .progress-container {
+      margin-top: 12px;
+      display: none;
+    }
+
+    .progress-container.visible {
+      display: block;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: var(--surface-color);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--primary-color);
+      border-radius: 2px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .progress-fill.indeterminate {
+      width: 30%;
+      animation: indeterminate 1.5s infinite ease-in-out;
+    }
+
+    @keyframes indeterminate {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(400%); }
+    }
+
+    .progress-details {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
   </style>
 </head>
 
@@ -152,6 +196,16 @@
 
   <button id="importBtn">Import Layout</button>
   <div id="status">Ready to import</div>
+  
+  <div id="progressContainer" class="progress-container">
+    <div class="progress-bar">
+      <div id="progressFill" class="progress-fill"></div>
+    </div>
+    <div class="progress-details">
+      <span id="progressStage">Initializing...</span>
+      <span id="progressPercent"></span>
+    </div>
+  </div>
 
   <script>
     const importBtn = document.getElementById('importBtn');
@@ -159,10 +213,34 @@
     const apiUrlInput = document.getElementById('apiUrl');
     const targetUrlInput = document.getElementById('targetUrl');
     const jsonInput = document.getElementById('jsonInput');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressFill = document.getElementById('progressFill');
+    const progressStage = document.getElementById('progressStage');
+    const progressPercent = document.getElementById('progressPercent');
 
     function setStatus(msg, type = '') {
       statusDiv.textContent = msg;
       statusDiv.className = type;
+    }
+
+    function showProgress(show = true) {
+      progressContainer.classList.toggle('visible', show);
+      if (!show) {
+        progressFill.style.width = '0%';
+        progressFill.classList.remove('indeterminate');
+      }
+    }
+
+    function updateProgress(stage, percent = null, detail = '') {
+      progressStage.textContent = detail ? `${stage}: ${detail}` : stage;
+      if (percent !== null) {
+        progressFill.classList.remove('indeterminate');
+        progressFill.style.width = `${percent}%`;
+        progressPercent.textContent = `${Math.round(percent)}%`;
+      } else {
+        progressFill.classList.add('indeterminate');
+        progressPercent.textContent = '';
+      }
     }
 
     importBtn.onclick = async () => {
@@ -172,16 +250,20 @@
       if (jsonText) {
         importBtn.disabled = true;
         setStatus('Parsing JSON data...');
+        showProgress(true);
+        updateProgress('Parsing JSON', 10);
 
         try {
           const parsed = JSON.parse(jsonText);
           const dataToBuild = parsed.data || parsed;
           if (!dataToBuild) throw new Error("Invalid JSON: Missing 'data'");
 
-          setStatus('Generating layers...', 'normal');
+          updateProgress('Building layout', 20);
+          setStatus('Generating layers...');
           parent.postMessage({ pluginMessage: { type: 'build', data: dataToBuild } }, '*');
         } catch (err) {
           setStatus(err.message, 'error');
+          showProgress(false);
           importBtn.disabled = false;
         }
         return;
@@ -197,7 +279,9 @@
       }
 
       importBtn.disabled = true;
-      setStatus('Scraping website... (5-15s)');
+      showProgress(true);
+      updateProgress('Connecting to scraper', null);
+      setStatus('Scraping website...');
 
       try {
         const response = await fetch(apiUrl, {
@@ -210,13 +294,16 @@
           throw new Error(`Scraper Error: ${response.status}`);
         }
 
+        updateProgress('Parsing response', 15);
         const json = await response.json();
 
-        setStatus('Scraping complete. Building...', 'normal');
+        updateProgress('Building layout', 20);
+        setStatus('Building Figma layers...');
         parent.postMessage({ pluginMessage: { type: 'build', data: json.data } }, '*');
 
       } catch (err) {
         setStatus(`Failed: ${err.message}`, 'error');
+        showProgress(false);
         importBtn.disabled = false;
       }
     };
@@ -227,9 +314,18 @@
       if (!msg) return;
 
       if (msg.type === 'done') {
+        updateProgress('Complete', 100);
         setStatus('Import Complete!', 'success');
         importBtn.disabled = false;
-        setTimeout(() => setStatus('Ready to import'), 3000);
+        setTimeout(() => {
+          setStatus('Ready to import');
+          showProgress(false);
+        }, 2000);
+      }
+
+      if (msg.type === 'progress') {
+        updateProgress(msg.stage, msg.percent, msg.detail || '');
+        if (msg.status) setStatus(msg.status);
       }
 
       // PROXY IMAGE FETCHING
