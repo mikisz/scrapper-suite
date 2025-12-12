@@ -1,0 +1,14 @@
+- [x] **Phase 1 Fixes & DevOps** <!-- id: 13 -->
+    - [x] Debug/Verify Docker build process <!-- id: 14 -->
+    - [x] Optimize Dockerfile for Puppeteer/Chrome <!-- id: 15 -->
+    - [x] Fix Figma Plugin Manifest (networkAccess reasoning) <!-- id: 100 -->
+    - [x] Fix TypeScript Build Error (web-to-llm route) <!-- id: 101 -->
+    - [x] Improve Figma Plugin UI (Health check & Error Handling) <!-- id: 102 -->
+- [ ] **Phase 2: Chrome Extension (The "Dual-Input" Architecture)** <!-- id: 16 -->
+    - [x] Refactor `analyzeNode` logic into shared module (`dom-serializer.js`) <!-- id: 17 -->
+    - [x] Update Scraper API to use shared module <!-- id: 18 -->
+    - [x] Create Chrome Extension Boilerplate <!-- id: 19 -->
+        - [x] Manifest v3 <!-- id: 20 -->
+        - [x] Content Script (injects `analyzeNode`) <!-- id: 21 -->
+        - [x] Popup UI (Scan button -> JSON copy) <!-- id: 22 -->
+    - [ ] Update Scraper API to accept JSON payload directly (bypass Puppeteer) <!-- id: 23 -->
