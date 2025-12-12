@@ -3,57 +3,155 @@
 
 <head>
   <style>
-    body {
-      font-family: Inter, sans-serif;
-      padding: 20px;
+    :root {
+      --bg-color: #0d0c22;
+      --surface-color: #1a192d;
+      --primary-color: #ea4c89;
+      /* Dribbble pink-ish */
+      --text-color: #ffffff;
+      --text-muted: #8e8e9e;
+      --border-color: #2f2f43;
     }
 
-    input {
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      padding: 16px;
+      margin: 0;
+      font-size: 13px;
+    }
+
+    h3 {
+      font-weight: 600;
+      font-size: 16px;
+      margin: 0 0 16px 0;
+      color: var(--text-color);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    label {
+      display: block;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+
+    input,
+    textarea {
       width: 100%;
-      padding: 8px;
-      margin-bottom: 10px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
+      background: var(--surface-color);
+      border: 1px solid var(--border-color);
+      color: var(--text-color);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 16px;
+      box-sizing: border-box;
+      outline: none;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+
+    input:focus,
+    textarea:focus {
+      border-color: var(--primary-color);
+    }
+
+    textarea {
+      height: 70px;
+      resize: vertical;
+      font-family: 'Roboto Mono', monospace;
+      font-size: 11px;
+    }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      text-align: center;
+      margin: 8px 0 20px 0;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .divider::before,
+    .divider::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .divider span {
+      padding: 0 10px;
     }
 
     button {
-      background: #000;
-      color: #fff;
-      padding: 10px 20px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
+      background: var(--primary-color);
+      color: white;
       width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    button:hover {
+      opacity: 0.9;
     }
 
     button:disabled {
-      background: #ccc;
+      background: var(--surface-color);
+      color: var(--text-muted);
+      cursor: not-allowed;
+    }
+
+    #status {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      min-height: 20px;
     }
 
     .error {
-      color: red;
-      margin-top: 10px;
-      font-size: 12px;
+      color: #ff4d4d !important;
+    }
+
+    .success {
+      color: #00e676 !important;
     }
   </style>
 </head>
 
 <body>
-  <h3>Website to Figma</h3>
-  <label>Scraper API URL</label>
-  <input id="apiUrl" type="text" value="https://scrappers.up.railway.app/api/website-to-figma" />
+  <h3>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" stroke-width="2" stroke-linecap="round"
+        stroke-linejoin="round" />
+      <path d="M2 17L12 22L22 17" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M2 12L12 17L22 12" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+    Scrapper Suite
+  </h3>
+
+  <label>API Endpoint</label>
+  <input id="apiUrl" type="text" value="https://scrappers.up.railway.app/api/website-to-figma" spellcheck="false" />
 
   <label>Target Website URL</label>
-  <input id="targetUrl" type="text" placeholder="https://example.com" />
+  <input id="targetUrl" type="text" placeholder="https://dribbble.com" spellcheck="false" />
 
-  <div style="text-align: center; margin: 10px 0; color: #666;">- OR -</div>
+  <div class="divider"><span>OR PASTE JSON</span></div>
 
-  <label>Paste JSON from Extension</label>
-  <textarea id="jsonInput" placeholder='{"url": "...", "data": {...}}'
-    style="width: 100%; height: 60px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; font-family: monospace; font-size: 11px;"></textarea>
+  <textarea id="jsonInput" placeholder='{"url": "...", "data": {...}}' spellcheck="false"></textarea>
 
-  <button id="importBtn">Import to Figma</button>
-  <div id="status"></div>
+  <button id="importBtn">Import Layout</button>
+  <div id="status">Ready to import</div>
 
   <script>
     const importBtn = document.getElementById('importBtn');
@@ -62,46 +160,44 @@
     const targetUrlInput = document.getElementById('targetUrl');
     const jsonInput = document.getElementById('jsonInput');
 
+    function setStatus(msg, type = '') {
+      statusDiv.textContent = msg;
+      statusDiv.className = type;
+    }
+
     importBtn.onclick = async () => {
       const jsonText = jsonInput.value.trim();
 
-      // MODE 1: JSON Import (Extension)
+      // MODE 1: JSON Import
       if (jsonText) {
         importBtn.disabled = true;
-        statusDiv.textContent = 'Parsing JSON...';
-        statusDiv.className = '';
+        setStatus('Parsing JSON data...');
 
         try {
           const parsed = JSON.parse(jsonText);
-          // Extension outputs: { url: "...", data: {...} }
-          // API outputs: { message: "...", data: {...} }
-          // We need to extract 'data'.
           const dataToBuild = parsed.data || parsed;
+          if (!dataToBuild) throw new Error("Invalid JSON: Missing 'data'");
 
-          if (!dataToBuild) throw new Error("Invalid JSON: Missing 'data' field");
-
-          statusDiv.textContent = 'Building from JSON...';
+          setStatus('Generating layers...', 'normal');
           parent.postMessage({ pluginMessage: { type: 'build', data: dataToBuild } }, '*');
         } catch (err) {
-          statusDiv.textContent = 'JSON Error: ' + err.message;
-          statusDiv.className = 'error';
+          setStatus(err.message, 'error');
           importBtn.disabled = false;
         }
         return;
       }
 
-      // MODE 2: URL Import (Scraper API)
-      const apiUrl = apiUrlInput.value.replace(/\/$/, ''); // simple trim slash
+      // MODE 2: Scraper Import
+      const apiUrl = apiUrlInput.value.replace(/\/$/, '');
       const targetUrl = targetUrlInput.value;
 
       if (!targetUrl) {
-        statusDiv.textContent = 'Please enter a URL or paste JSON';
+        setStatus('Please enter a URL first', 'error');
         return;
       }
 
       importBtn.disabled = true;
-      statusDiv.textContent = 'Scraping... (this may take a few seconds)';
-      statusDiv.className = '';
+      setStatus('Scraping website... (5-15s)');
 
       try {
         const response = await fetch(apiUrl, {
@@ -111,49 +207,73 @@
         });
 
         if (!response.ok) {
-          throw new Error('Scraper failed: ' + response.statusText + ' (' + response.status + ')');
+          throw new Error(`Scraper Error: ${response.status}`);
         }
 
         const json = await response.json();
 
-        statusDiv.textContent = 'Building in Figma...';
+        setStatus('Scraping complete. Building...', 'normal');
         parent.postMessage({ pluginMessage: { type: 'build', data: json.data } }, '*');
 
       } catch (err) {
-        statusDiv.textContent = 'Connection Error: ' + err.message + '. Is the server running?';
-        statusDiv.className = 'error';
+        setStatus(`Failed: ${err.message}`, 'error');
         importBtn.disabled = false;
       }
     };
 
-
-    // Health Check removed as requested to support standalone usage
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
-      if (msg && msg.type === 'done') {
-        statusDiv.textContent = 'Done!';
+
+      if (!msg) return;
+
+      if (msg.type === 'done') {
+        setStatus('Import Complete!', 'success');
         importBtn.disabled = false;
+        setTimeout(() => setStatus('Ready to import'), 3000);
       }
 
-      // Handle Image Fetch Request from Plugin Code
-      if (msg && msg.type === 'fetch-image') {
+      // PROXY IMAGE FETCHING
+      if (msg.type === 'fetch-image') {
         const url = msg.url;
         const id = msg.id;
 
-        fetch(url)
-          .then(response => {
-            if (!response.ok) throw new Error('Network response was not ok');
-            return response.arrayBuffer();
+        // Construct Proxy URL
+        // Base is derived from the API URL input (assuming same domain)
+        // e.g. https://domain.com/api/website-to-figma -> https://domain.com
+        const apiInputValue = apiUrlInput.value;
+        let proxyBase = '';
+        try {
+          // Robust base extraction
+          const urlObj = new URL(apiInputValue);
+          proxyBase = urlObj.origin;
+        } catch (e) {
+          // Fallback (unlikely)
+          proxyBase = 'https://scrappers.up.railway.app';
+        }
+
+        const proxyUrl = `${proxyBase}/api/proxy-image?url=${encodeURIComponent(url)}`;
+
+        // Try Proxy first (more reliable for CORS)
+        fetch(proxyUrl)
+          .then(res => {
+            if (!res.ok) throw new Error('Proxy failed');
+            return res.arrayBuffer();
           })
           .then(buffer => {
-            const uint8Array = new Uint8Array(buffer);
-            // Post back to plugin
-            parent.postMessage({ pluginMessage: { type: 'image-data', id, data: uint8Array } }, '*');
+            parent.postMessage({ pluginMessage: { type: 'image-data', id, data: new Uint8Array(buffer) } }, '*');
           })
           .catch(err => {
-            console.error('Failed to fetch image:', url, err);
-            // Post back failure so plugin doesn't hang
-            parent.postMessage({ pluginMessage: { type: 'image-data', id, error: true } }, '*');
+            console.warn('Proxy fetch failed, trying direct:', err);
+            // Fallback: Direct fetch (might fail CORS)
+            fetch(url)
+              .then(res => res.arrayBuffer())
+              .then(buffer => {
+                parent.postMessage({ pluginMessage: { type: 'image-data', id, data: new Uint8Array(buffer) } }, '*');
+              })
+              .catch(directErr => {
+                console.error('Direct fetch failed too:', directErr);
+                parent.postMessage({ pluginMessage: { type: 'image-data', id, error: true } }, '*');
+              });
           });
       }
     };
