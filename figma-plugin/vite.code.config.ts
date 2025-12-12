@@ -11,7 +11,7 @@ export default defineConfig({
             entry: path.resolve(__dirname, 'src/code.ts'),
             name: 'code',
             fileName: 'code',
-            formats: ['es'],
+            formats: ['iife'],
         },
         rollupOptions: {
             output: {

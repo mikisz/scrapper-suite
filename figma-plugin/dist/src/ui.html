@@ -1,22 +1,57 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <style>
-    body { font-family: Inter, sans-serif; padding: 20px; }
-    input { width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
-    button { background: #000; color: #fff; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%; }
-    button:disabled { background: #ccc; }
-    .error { color: red; margin-top: 10px; font-size: 12px; }
+    body {
+      font-family: Inter, sans-serif;
+      padding: 20px;
+    }
+
+    input {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+
+    button {
+      background: #000;
+      color: #fff;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    button:disabled {
+      background: #ccc;
+    }
+
+    .error {
+      color: red;
+      margin-top: 10px;
+      font-size: 12px;
+    }
   </style>
 </head>
+
 <body>
   <h3>Website to Figma</h3>
   <label>Scraper API URL</label>
   <input id="apiUrl" type="text" value="http://localhost:3000/api/website-to-figma" />
-  
+
   <label>Target Website URL</label>
   <input id="targetUrl" type="text" placeholder="https://example.com" />
-  
+
+  <div style="text-align: center; margin: 10px 0; color: #666;">- OR -</div>
+
+  <label>Paste JSON from Extension</label>
+  <textarea id="jsonInput" placeholder='{"url": "...", "data": {...}}'
+    style="width: 100%; height: 60px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; font-family: monospace; font-size: 11px;"></textarea>
+
   <button id="importBtn">Import to Figma</button>
   <div id="status"></div>
 
@@ -25,18 +60,48 @@
     const statusDiv = document.getElementById('status');
     const apiUrlInput = document.getElementById('apiUrl');
     const targetUrlInput = document.getElementById('targetUrl');
+    const jsonInput = document.getElementById('jsonInput');
 
     importBtn.onclick = async () => {
-      const apiUrl = apiUrlInput.value;
+      const jsonText = jsonInput.value.trim();
+
+      // MODE 1: JSON Import (Extension)
+      if (jsonText) {
+        importBtn.disabled = true;
+        statusDiv.textContent = 'Parsing JSON...';
+        statusDiv.className = '';
+
+        try {
+          const parsed = JSON.parse(jsonText);
+          // Extension outputs: { url: "...", data: {...} }
+          // API outputs: { message: "...", data: {...} }
+          // We need to extract 'data'.
+          const dataToBuild = parsed.data || parsed;
+
+          if (!dataToBuild) throw new Error("Invalid JSON: Missing 'data' field");
+
+          statusDiv.textContent = 'Building from JSON...';
+          parent.postMessage({ pluginMessage: { type: 'build', data: dataToBuild } }, '*');
+        } catch (err) {
+          statusDiv.textContent = 'JSON Error: ' + err.message;
+          statusDiv.className = 'error';
+          importBtn.disabled = false;
+        }
+        return;
+      }
+
+      // MODE 2: URL Import (Scraper API)
+      const apiUrl = apiUrlInput.value.replace(/\/$/, ''); // simple trim slash
       const targetUrl = targetUrlInput.value;
 
       if (!targetUrl) {
-        statusDiv.textContent = 'Please enter a target URL';
+        statusDiv.textContent = 'Please enter a URL or paste JSON';
         return;
       }
 
       importBtn.disabled = true;
       statusDiv.textContent = 'Scraping... (this may take a few seconds)';
+      statusDiv.className = '';
 
       try {
         const response = await fetch(apiUrl, {
@@ -46,21 +111,23 @@
         });
 
         if (!response.ok) {
-          throw new Error('Scraper failed: ' + response.statusText);
+          throw new Error('Scraper failed: ' + response.statusText + ' (' + response.status + ')');
         }
 
         const json = await response.json();
-        
+
         statusDiv.textContent = 'Building in Figma...';
         parent.postMessage({ pluginMessage: { type: 'build', data: json.data } }, '*');
 
       } catch (err) {
-        statusDiv.textContent = 'Error: ' + err.message;
+        statusDiv.textContent = 'Connection Error: ' + err.message + '. Is the server running?';
         statusDiv.className = 'error';
         importBtn.disabled = false;
       }
     };
 
+
+    // Health Check removed as requested to support standalone usage
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
       if (msg && msg.type === 'done') {
@@ -70,4 +137,5 @@
     };
   </script>
 </body>
+
 </html>
