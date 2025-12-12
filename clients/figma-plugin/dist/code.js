@@ -69,6 +69,36 @@ var __async = (__this, __arguments, generator) => {
     });
   }
   const pendingImages = {};
+  const imageCache = /* @__PURE__ */ new Map();
+  function extractImageUrls(node, urls) {
+    if (!node) return;
+    if (node.type === "IMAGE" && node.src) {
+      urls.add(node.src);
+    }
+    const styles = node.styles || {};
+    if (styles.backgroundImage && styles.backgroundImage.type === "IMAGE" && styles.backgroundImage.url) {
+      urls.add(styles.backgroundImage.url);
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        extractImageUrls(child, urls);
+      }
+    }
+  }
+  function preloadImages(rootData) {
+    return __async(this, null, function* () {
+      const urls = /* @__PURE__ */ new Set();
+      extractImageUrls(rootData, urls);
+      if (urls.size === 0) return;
+      console.log(`Preloading ${urls.size} images in parallel...`);
+      const downloadPromises = Array.from(urls).map((url) => __async(this, null, function* () {
+        const imageData = yield downloadImage(url);
+        imageCache.set(url, imageData);
+      }));
+      yield Promise.all(downloadPromises);
+      console.log(`Preloaded ${urls.size} images successfully`);
+    });
+  }
   figma.ui.onmessage = (msg) => __async(this, null, function* () {
     if (msg.type === "image-data") {
       const resolver = pendingImages[msg.id];
@@ -79,8 +109,15 @@ var __async = (__this, __arguments, generator) => {
       const rootData = msg.data;
       totalNodes = countNodes(rootData);
       processedNodes = 0;
+      imageCache.clear();
       sendProgress("Loading fonts", 25, "", "Preparing fonts...");
       yield loadFonts(rootData);
+      const urls = /* @__PURE__ */ new Set();
+      extractImageUrls(rootData, urls);
+      if (urls.size > 0) {
+        sendProgress("Loading images", 50, `0/${urls.size} images`, "Downloading images in parallel...");
+        yield preloadImages(rootData);
+      }
       sendProgress("Building layout", 30, `0/${totalNodes} nodes`, "Creating Figma layers...");
       yield buildNode(rootData, figma.currentPage, void 0);
       figma.ui.postMessage({ type: "done" });
@@ -327,7 +364,7 @@ var __async = (__this, __arguments, generator) => {
         rect.name = "Image";
         node = rect;
         if (data.src) {
-          const imageBytes = yield downloadImage(data.src);
+          const imageBytes = imageCache.get(data.src);
           if (imageBytes) {
             const imageHash = figma.createImage(imageBytes).hash;
             rect.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash }];
@@ -369,7 +406,7 @@ var __async = (__this, __arguments, generator) => {
           fills.push({ type: "SOLID", color: s.backgroundColor, opacity: s.opacity });
         }
         if (s.backgroundImage && s.backgroundImage.type === "IMAGE") {
-          const bgBytes = yield downloadImage(s.backgroundImage.url);
+          const bgBytes = imageCache.get(s.backgroundImage.url);
           if (bgBytes) {
             const bgHash = figma.createImage(bgBytes).hash;
             fills.push({ type: "IMAGE", scaleMode: "FILL", imageHash: bgHash });

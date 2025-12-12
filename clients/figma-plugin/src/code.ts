@@ -51,6 +51,49 @@ function downloadImage(url: string): Promise<Uint8Array | null> {
 }
 
 const pendingImages: { [key: string]: (data: Uint8Array | null) => void } = {};
+const imageCache: Map<string, Uint8Array | null> = new Map();
+
+// Extract all image URLs from the visual tree
+function extractImageUrls(node: any, urls: Set<string>): void {
+    if (!node) return;
+    
+    // Direct image nodes
+    if (node.type === 'IMAGE' && node.src) {
+        urls.add(node.src);
+    }
+    
+    // Background images
+    const styles = node.styles || {};
+    if (styles.backgroundImage && styles.backgroundImage.type === 'IMAGE' && styles.backgroundImage.url) {
+        urls.add(styles.backgroundImage.url);
+    }
+    
+    // Recurse through children
+    if (node.children) {
+        for (const child of node.children) {
+            extractImageUrls(child, urls);
+        }
+    }
+}
+
+// Download all images in parallel and cache them
+async function preloadImages(rootData: any): Promise<void> {
+    const urls = new Set<string>();
+    extractImageUrls(rootData, urls);
+    
+    if (urls.size === 0) return;
+    
+    console.log(`Preloading ${urls.size} images in parallel...`);
+    
+    // Download all images in parallel
+    const downloadPromises = Array.from(urls).map(async (url) => {
+        const imageData = await downloadImage(url);
+        imageCache.set(url, imageData);
+    });
+    
+    await Promise.all(downloadPromises);
+    console.log(`Preloaded ${urls.size} images successfully`);
+}
 
 // Update main listener to dispatch image responses
 figma.ui.onmessage = async (msg) => {
@@ -69,9 +112,22 @@ figma.ui.onmessage = async (msg) => {
         totalNodes = countNodes(rootData);
         processedNodes = 0;
         
+        // Clear cache from previous imports
+        imageCache.clear();
+        
+        // Step 1: Load fonts
         sendProgress('Loading fonts', 25, '', 'Preparing fonts...');
         await loadFonts(rootData);
         
+        // Step 2: Preload all images in parallel
+        const urls = new Set<string>();
+        extractImageUrls(rootData, urls);
+        if (urls.size > 0) {
+            sendProgress('Loading images', 50, `0/${urls.size} images`, 'Downloading images in parallel...');
+            await preloadImages(rootData);
+        }
+        
+        // Step 3: Build the node tree (images are now cached)
         sendProgress('Building layout', 30, `0/${totalNodes} nodes`, 'Creating Figma layers...');
         await buildNode(rootData, figma.currentPage, undefined);
         
@@ -416,9 +472,9 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
         rect.name = 'Image';
         node = rect;
 
-        // Download Image
+        // Use cached image (already downloaded in parallel)
         if (data.src) {
-            const imageBytes = await downloadImage(data.src);
+            const imageBytes = imageCache.get(data.src);
             if (imageBytes) {
                 const imageHash = figma.createImage(imageBytes).hash;
                 rect.fills = [{ type: 'IMAGE', scaleMode: 'FILL', imageHash }];
@@ -478,7 +534,8 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             fills.push({ type: 'SOLID', color: s.backgroundColor, opacity: s.opacity });
         }
         if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
-            const bgBytes = await downloadImage(s.backgroundImage.url);
+            // Use cached image (already downloaded in parallel)
+            const bgBytes = imageCache.get(s.backgroundImage.url);
             if (bgBytes) {
                 const bgHash = figma.createImage(bgBytes).hash;
                 fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: bgHash });
