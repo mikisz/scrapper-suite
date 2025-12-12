@@ -14,3 +14,20 @@
     - [x] **Phase 3: Integration & Polish** <!-- id: 23 -->
         - [x] Update Figma Plugin to accept pasted JSON <!-- id: 24 -->
         - [x] Replace Docker build with `ghcr.io/puppeteer/puppeteer` <!-- id: 25 -->
+    - [x] **Phase 4: Polish & Fixes**
+        - [x] Fix Figma plugin syntax error (IIFE build)
+        - [x] Improve visual fidelity (Images, Backgrounds, Positioning)
+        - [x] Add Shadow DOM support for Angular/Web Components
+        - [x] Fix empty/black frames (Relaxed size checks)
+    - [x] **Phase 5: Enhanced Fidelity**
+        - [x] Scraper: Capture `box-shadow`, `letter-spacing`, `text-transform`, `border`, `svg`
+        - [x] Plugin: Parse and apply Shadow effects, Typography, Borders
+    - [x] **Phase 6: Plugin Experience Polish**
+        - [x] Backend: Create Image Proxy API (`/api/proxy-image`)
+        - [x] Plugin: Use Proxy for CORS images
+        - [x] Plugin: Dark Mode UI
+    - [x] **Phase 7: Web-to-LLM Polish**
+        - [x] API: Enhance Metadata & Robust Image Fetching
+    - [x] **Phase 8: Repo Reorganization & Docs**
+        - [x] Move to `clients/` directory
+        - [x] Update Documentation

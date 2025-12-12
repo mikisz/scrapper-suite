@@ -1,5 +1,8 @@
 # Website to Figma Scraper & Plugin Analysis
 
+> [!CAUTION]
+> **Archival Document**: This analysis represents the initial exploration phase. The actual implementation (Puppeteer + React Plugin + Image Proxy) has evolved significantly from this original plan. Refer to `docs/guides/how-to-run.md` and `docs/TOOLS.md` for the current state.
+
 ## Executive Summary
 This document analyzes the feasibility and technical approach for creating a "Website to Figma" workflow that scrapes web pages and reconstructs them as editable Figma designs. The proposed solution involves a hybrid approach using rule-based parsing for structure/styles and AI for semantic component mapping.
 
