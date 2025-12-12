@@ -22,106 +22,20 @@ export async function POST(request: Request) {
             await page.setViewport({ width: 1440, height: 900 });
             await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
 
-            // Run code inside the browser to extract the visual tree
+            // Inject the shared serializer
+            // We read the file content and inject it into the page
+            const fs = require('fs');
+            const path = require('path');
+            const serializerPath = path.join(process.cwd(), 'app/lib/dom-serializer.js');
+            const serializerCode = fs.readFileSync(serializerPath, 'utf8');
+
+            // Execute the library code to define window.FigmaSerializer
+            await page.evaluate(serializerCode);
+
+            // Run the serialization
             const figmaTree = await page.evaluate(() => {
-                function getRgb(color: string) {
-                    if (!color) return null;
-                    const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-                    if (match) {
-                        return {
-                            r: parseInt(match[1]) / 255,
-                            g: parseInt(match[2]) / 255,
-                            b: parseInt(match[3]) / 255,
-                        };
-                    }
-                    return null;
-                }
-
-                function parseUnit(val: string) {
-                    return parseFloat(val) || 0;
-                }
-
-                function isVisible(el: HTMLElement) {
-                    const style = window.getComputedStyle(el);
-                    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-                }
-
-                function analyzeNode(node: Node): any {
-                    if (node.nodeType === Node.TEXT_NODE) {
-                        const textContent = node.textContent?.trim();
-                        if (!textContent) return null;
-                        return {
-                            type: 'TEXT',
-                            content: textContent,
-                        };
-                    }
-
-                    if (node.nodeType === Node.ELEMENT_NODE) {
-                        const el = node as HTMLElement;
-                        if (!isVisible(el)) return null;
-
-                        const computed = window.getComputedStyle(el);
-                        const rect = el.getBoundingClientRect();
-
-                        // Skip tiny elements or empty containers that aren't strictly explicit spacing
-                        if (rect.width === 0 || rect.height === 0) return null;
-
-                        const styles = {
-                            width: rect.width,
-                            height: rect.height,
-                            display: computed.display,
-                            flexDirection: computed.flexDirection,
-                            justifyContent: computed.justifyContent,
-                            alignItems: computed.alignItems,
-                            gap: parseUnit(computed.gap),
-                            padding: {
-                                top: parseUnit(computed.paddingTop),
-                                right: parseUnit(computed.paddingRight),
-                                bottom: parseUnit(computed.paddingBottom),
-                                left: parseUnit(computed.paddingLeft),
-                            },
-                            backgroundColor: getRgb(computed.backgroundColor),
-                            borderRadius: {
-                                topLeft: parseUnit(computed.borderTopLeftRadius),
-                                topRight: parseUnit(computed.borderTopRightRadius),
-                                bottomRight: parseUnit(computed.borderBottomRightRadius),
-                                bottomLeft: parseUnit(computed.borderBottomLeftRadius),
-                            },
-                            color: getRgb(computed.color),
-                            fontSize: parseUnit(computed.fontSize),
-                            fontWeight: computed.fontWeight,
-                            fontFamily: computed.fontFamily,
-                            lineHeight: computed.lineHeight,
-                            textAlign: computed.textAlign,
-                        };
-
-                        const children: any[] = [];
-                        node.childNodes.forEach(child => {
-                            const result = analyzeNode(child);
-                            if (result) children.push(result);
-                        });
-
-                        // Special handling for leaf nodes that act as text containers
-                        if (children.length === 1 && children[0].type === 'TEXT') {
-                            // Merge text properties into this node
-                            return {
-                                type: 'TEXT_NODE',
-                                ...styles,
-                                content: children[0].content
-                            };
-                        }
-
-                        return {
-                            type: 'FRAME',
-                            tag: el.tagName.toLowerCase(),
-                            styles,
-                            children,
-                        };
-                    }
-                    return null;
-                }
-
-                return analyzeNode(document.body);
+                // @ts-ignore
+                return window.FigmaSerializer.serialize(document.body);
             });
 
             await browser.close();

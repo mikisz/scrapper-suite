@@ -10,6 +10,7 @@
     "networkAccess": {
         "allowedDomains": [
             "*"
-        ]
+        ],
+        "reasoning": "This plugin connects to a local server to fetch scraped website data."
     }
 }
