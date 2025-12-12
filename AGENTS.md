@@ -44,8 +44,8 @@ Examples:
 *   **`scrapper-suite/`**: Next.js app. The "Brain" and API server.
     *   `app/api/website-to-figma/route.ts`: Main API endpoint for public URLs.
     *   `app/api/web-to-llm/route.ts`: API for converting sites to Markdown.
-    *   `app/lib/dom-serializer.js`: **CRITICAL**. Shared logic. Injected into Puppeteer AND copied to Extension.
-    *   *Note: Sync changes from here to `clients/chrome-extension/lib/`.*
+    *   `app/lib/dom-serializer.js`: **CRITICAL**. Single source of truth for DOM serialization.
+    *   *The Chrome extension uses a symlink to this file—no manual sync needed.*
 
 *   **`clients/figma-plugin/`**: Website-to-Figma Plugin.
     *   `src/code.ts`: Main thread. Handles rendering (Shadows, Borders, Gradients).
