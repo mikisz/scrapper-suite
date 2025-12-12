@@ -62,17 +62,10 @@ function extractImageUrls(node: any, urls: Set<string>): void {
         urls.add(node.src);
     }
     
-    // Background images (from styles or pseudo-elements)
+    // Background images
     const styles = node.styles || {};
     if (styles.backgroundImage && styles.backgroundImage.type === 'IMAGE' && styles.backgroundImage.url) {
         urls.add(styles.backgroundImage.url);
-    }
-    
-    // Pseudo-elements with background images
-    if (node.type === 'PSEUDO_ELEMENT' && node.contentType === 'IMAGE') {
-        if (styles.backgroundImage && styles.backgroundImage.url) {
-            urls.add(styles.backgroundImage.url);
-        }
     }
     
     // Recurse through children
@@ -250,13 +243,6 @@ function extractFonts(node: any, fonts: Set<string>): void {
         fonts.add(`${family}:${weight}`);
     }
     
-    // Handle pseudo-elements with text content
-    if (node.type === 'PSEUDO_ELEMENT' && node.contentType === 'TEXT' && styles.fontFamily) {
-        const family = parseFontFamily(styles.fontFamily);
-        const weight = styles.fontWeight || '400';
-        fonts.add(`${family}:${weight}`);
-    }
-    
     if (node.children) {
         for (const child of node.children) {
             extractFonts(child, fonts);
@@ -406,103 +392,63 @@ function angleToGradientTransform(angleDeg: number): Transform {
     ];
 }
 
-// --- HELPER: Parse Color String to RGBA ---
-function parseColorString(colorStr: string): RGBA | null {
-    let r = 0, g = 0, b = 0, a = 1;
-    if (colorStr.startsWith('rgba')) {
-        const nums = colorStr.match(/[\d.]+/g)?.map(Number);
-        if (nums && nums.length >= 3) { r = nums[0]/255; g = nums[1]/255; b = nums[2]/255; a = nums[3] ?? 1; }
-    } else if (colorStr.startsWith('rgb')) {
-        const nums = colorStr.match(/[\d.]+/g)?.map(Number);
-        if (nums && nums.length >= 3) { r = nums[0]/255; g = nums[1]/255; b = nums[2]/255; }
-    } else if (colorStr.startsWith('#')) {
-        const hex = colorStr.slice(1);
-        if (hex.length === 3) { r = parseInt(hex[0]+hex[0],16)/255; g = parseInt(hex[1]+hex[1],16)/255; b = parseInt(hex[2]+hex[2],16)/255; }
-        else if (hex.length >= 6) { r = parseInt(hex.slice(0,2),16)/255; g = parseInt(hex.slice(2,4),16)/255; b = parseInt(hex.slice(4,6),16)/255; if(hex.length===8) a = parseInt(hex.slice(6,8),16)/255; }
-    } else { return null; }
-    return { r, g, b, a };
-}
+// --- HELPER: Parse Gradient ---
+function parseGradient(gradientStr: string): GradientPaint | null {
+    if (!gradientStr || !gradientStr.includes('linear-gradient')) return null;
 
-// --- HELPER: Extract gradient color stops ---
-function extractGradientStops(gradientStr: string): ColorStop[] {
-    const colorStopRegex = /(rgba?\([^)]+\)|#[a-fA-F0-9]{3,8})(?:\s+(\d+(?:\.\d+)?%?))?/g;
-    let match;
-    const rawStops: { color: RGBA; position?: number }[] = [];
-    while ((match = colorStopRegex.exec(gradientStr)) !== null) {
-        const color = parseColorString(match[1]);
-        if (!color) continue;
-        rawStops.push({ color, position: match[2] ? parseFloat(match[2])/100 : undefined });
-    }
-    if (rawStops.length < 2) return [];
-    for (let i = 0; i < rawStops.length; i++) {
-        if (rawStops[i].position === undefined) {
-            if (i === 0) rawStops[i].position = 0;
-            else if (i === rawStops.length - 1) rawStops[i].position = 1;
-            else {
-                const prevIdx = i - 1;
-                let nextIdx = i + 1;
-                while (nextIdx < rawStops.length && rawStops[nextIdx].position === undefined) nextIdx++;
-                const prevPos = rawStops[prevIdx].position || 0;
-                const nextPos = rawStops[nextIdx].position || 1;
-                rawStops[i].position = prevPos + (nextPos - prevPos) * ((i - prevIdx) / (nextIdx - prevIdx));
-            }
-        }
-    }
-    return rawStops.map(s => ({ position: s.position || 0, color: s.color }));
-}
-
-// --- HELPER: Parse Radial Gradient Position ---
-function parseRadialGradientPosition(gradientStr: string): { x: number; y: number } {
-    let x = 0.5, y = 0.5;
-    const atMatch = gradientStr.match(/at\s+([^,)]+)/i);
-    if (atMatch) {
-        const parts = atMatch[1].trim().split(/\s+/);
-        const parsePos = (val: string): number => {
-            if (val === 'center') return 0.5;
-            if (val === 'left' || val === 'top') return 0;
-            if (val === 'right' || val === 'bottom') return 1;
-            if (val.endsWith('%')) return parseFloat(val) / 100;
-            return 0.5;
-        };
-        if (parts.length >= 2) { x = parsePos(parts[0]); y = parsePos(parts[1]); }
-        else if (parts.length === 1) {
-            const val = parts[0];
-            if (val === 'left') { x = 0; } else if (val === 'right') { x = 1; }
-            else if (val === 'top') { y = 0; } else if (val === 'bottom') { y = 1; }
-            else { x = parsePos(val); }
-        }
-    }
-    return { x, y };
-}
-
-// --- HELPER: Parse Radial Gradient ---
-function parseRadialGradient(gradientStr: string): GradientPaint | null {
-    if (!gradientStr?.includes('radial-gradient')) return null;
-    const { x, y } = parseRadialGradientPosition(gradientStr);
-    const scaleX = gradientStr.includes('closest-side') ? 0.5 : 1;
-    const scaleY = scaleX;
-    const transform: Transform = [[scaleX, 0, x - scaleX/2], [0, scaleY, y - scaleY/2]];
-    const stops = extractGradientStops(gradientStr);
-    if (stops.length < 2) return null;
-    return { type: 'GRADIENT_RADIAL', gradientStops: stops, gradientTransform: transform };
-}
-
-// --- HELPER: Parse Linear Gradient ---
-function parseLinearGradient(gradientStr: string): GradientPaint | null {
-    if (!gradientStr?.includes('linear-gradient')) return null;
+    // 1. Parse angle
     const angle = parseGradientAngle(gradientStr);
     const transform = angleToGradientTransform(angle);
-    const stops = extractGradientStops(gradientStr);
-    if (stops.length < 2) return null;
-    return { type: 'GRADIENT_LINEAR', gradientStops: stops, gradientTransform: transform };
-}
 
-// --- HELPER: Parse Any Gradient ---
-function parseGradient(gradientStr: string): GradientPaint | null {
-    if (!gradientStr) return null;
-    if (gradientStr.includes('radial-gradient')) return parseRadialGradient(gradientStr);
-    if (gradientStr.includes('linear-gradient')) return parseLinearGradient(gradientStr);
-    return null;
+    // 2. Extract Colors
+    // Regex matches rgba?(...) or #...
+    const colors: RGB[] = [];
+    const colorMatches = gradientStr.match(/rgba?\(.*?\)|#[a-fA-F0-9]{3,8}/g);
+
+    if (colorMatches && colorMatches.length >= 2) {
+        colorMatches.forEach(c => {
+            // Parse Color
+            let r = 0, g = 0, b = 0;
+            if (c.startsWith('rgba')) {
+                const nums = c.match(/[\d.]+/g)?.map(Number);
+                if (nums && nums.length >= 3) {
+                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255;
+                }
+            } else if (c.startsWith('rgb')) {
+                const nums = c.match(/[\d.]+/g)?.map(Number);
+                if (nums && nums.length >= 3) {
+                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255;
+                }
+            } else if (c.startsWith('#')) {
+                // Support both #RGB, #RRGGBB, and #RRGGBBAA
+                const hex = c.slice(1);
+                if (hex.length === 3) {
+                    r = parseInt(hex[0] + hex[0], 16) / 255;
+                    g = parseInt(hex[1] + hex[1], 16) / 255;
+                    b = parseInt(hex[2] + hex[2], 16) / 255;
+                } else if (hex.length >= 6) {
+                    r = parseInt(hex.slice(0, 2), 16) / 255;
+                    g = parseInt(hex.slice(2, 4), 16) / 255;
+                    b = parseInt(hex.slice(4, 6), 16) / 255;
+                }
+            }
+            colors.push({ r, g, b });
+        });
+    }
+
+    if (colors.length < 2) return null;
+
+    // 3. Construct Gradient Stops
+    const stops: ColorStop[] = colors.map((c, i) => ({
+        position: i / (colors.length - 1),
+        color: { ...c, a: 1 }
+    }));
+
+    return {
+        type: 'GRADIENT_LINEAR',
+        gradientStops: stops,
+        gradientTransform: transform
+    };
 }
 
 
@@ -521,32 +467,7 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     const s = data.styles || {};
 
     // --- 1. CREATE NODE BASED ON TYPE ---
-    if (data.type === 'VECTOR') {
-        // SVG element - create editable vector from SVG string
-        try {
-            const svgNode = figma.createNodeFromSvg(data.svgString);
-            svgNode.name = 'SVG';
-            node = svgNode;
-
-            // Apply size from styles if available
-            if (s.width && s.height && s.width > 0 && s.height > 0) {
-                svgNode.resize(s.width, s.height);
-            }
-
-            // Apply shadows if present
-            if (s.boxShadow) {
-                svgNode.effects = parseBoxShadow(s.boxShadow);
-            }
-        } catch (e) {
-            // Fallback: If SVG parsing fails, create a placeholder rectangle
-            console.warn('Failed to parse SVG, creating placeholder:', e);
-            const rect = figma.createRectangle();
-            rect.name = 'SVG (failed to parse)';
-            rect.fills = [{ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } }];
-            node = rect;
-        }
-    }
-    else if (data.type === 'IMAGE') {
+    if (data.type === 'IMAGE') {
         const rect = figma.createRectangle();
         rect.name = 'Image';
         node = rect;
@@ -565,75 +486,6 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             node.effects = parseBoxShadow(s.boxShadow);
         }
 
-    }
-    else if (data.type === 'PSEUDO_ELEMENT') {
-        // Handle CSS pseudo-elements (::before/::after)
-        const pseudoName = data.pseudo === '::before' ? 'Before' : 'After';
-        
-        if (data.contentType === 'TEXT' && data.content) {
-            // Text pseudo-element
-            const text = figma.createText();
-            node = text;
-            text.name = `::${pseudoName.toLowerCase()}`;
-            
-            // Load font with fallback
-            const fontFamily = parseFontFamily(s.fontFamily);
-            const fontWeight = s.fontWeight || '400';
-            const loadedFont = await tryLoadFont(fontFamily, fontWeight);
-            text.fontName = loadedFont;
-            
-            text.characters = data.content;
-            
-            if (s.fontSize) text.fontSize = s.fontSize;
-            if (s.color) {
-                text.fills = [{ type: 'SOLID', color: s.color }];
-            }
-            if (s.boxShadow) {
-                text.effects = parseBoxShadow(s.boxShadow);
-            }
-        } else {
-            // Decorative or image pseudo-element - create a frame
-            const frame = figma.createFrame();
-            frame.name = `::${pseudoName.toLowerCase()}`;
-            node = frame;
-            
-            // Apply background
-            const fills: Paint[] = [];
-            if (s.backgroundColor) {
-                fills.push({ type: 'SOLID', color: s.backgroundColor, opacity: s.opacity });
-            }
-            if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
-                const bgBytes = imageCache.get(s.backgroundImage.url);
-                if (bgBytes) {
-                    const bgHash = figma.createImage(bgBytes).hash;
-                    fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: bgHash });
-                }
-            } else if (s.backgroundImage && s.backgroundImage.type === 'GRADIENT') {
-                const gradient = parseGradient(s.backgroundImage.raw);
-                if (gradient) fills.push(gradient);
-            }
-            frame.fills = fills.length > 0 ? fills : [];
-            
-            // Apply border radius
-            if (s.borderRadius) {
-                frame.topLeftRadius = s.borderRadius.topLeft || 0;
-                frame.topRightRadius = s.borderRadius.topRight || 0;
-                frame.bottomRightRadius = s.borderRadius.bottomRight || 0;
-                frame.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
-            }
-            
-            // Apply shadows
-            if (s.boxShadow) {
-                frame.effects = parseBoxShadow(s.boxShadow);
-            }
-            
-            // Apply borders
-            if (s.border && s.border.width > 0 && s.border.color) {
-                frame.strokes = [{ type: 'SOLID', color: s.border.color }];
-                frame.strokeWeight = s.border.width;
-                frame.strokeAlign = 'INSIDE';
-            }
-        }
     }
     else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
         const text = figma.createText();
@@ -770,60 +622,9 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     // --- 3. FRAME SPECIFIC: AUTO LAYOUT CONFIG ---
     if (data.type === 'FRAME' && node.type === 'FRAME') {
         const frame = node;
-        
-        // Helper to count grid columns from template
-        const countGridColumns = (template: string | undefined): number => {
-            if (!template || template === 'none') return 1;
-            const repeatMatch = template.match(/repeat\(\s*(\d+)/);
-            if (repeatMatch) return parseInt(repeatMatch[1]) || 1;
-            return template.trim().split(/\s+/).filter(p => p && p !== 'none').length || 1;
-        };
-        
-        if (s.display === 'grid') {
-            // CSS Grid -> Figma Auto Layout with Wrap
-            const columns = countGridColumns(s.gridTemplateColumns);
-            
-            if (columns > 1) {
-                // Multi-column grid: Use HORIZONTAL with WRAP
-                frame.layoutMode = 'HORIZONTAL';
-                frame.layoutWrap = 'WRAP';
-            } else {
-                // Single column or row-based: Use VERTICAL
-                frame.layoutMode = 'VERTICAL';
-            }
-            
-            // Gap handling (CSS Grid has separate column-gap and row-gap)
-            frame.itemSpacing = s.columnGap || s.gap || 0;
-            frame.counterAxisSpacing = s.rowGap || s.gap || 0;
-            
-            // Padding
-            frame.paddingTop = s.padding?.top || 0;
-            frame.paddingRight = s.padding?.right || 0;
-            frame.paddingBottom = s.padding?.bottom || 0;
-            frame.paddingLeft = s.padding?.left || 0;
-            
-            // Alignment
-            switch (s.alignItems) {
-                case 'center': frame.counterAxisAlignItems = 'CENTER'; break;
-                case 'end': case 'flex-end': frame.counterAxisAlignItems = 'MAX'; break;
-                default: frame.counterAxisAlignItems = 'MIN';
-            }
-            switch (s.justifyContent) {
-                case 'center': frame.primaryAxisAlignItems = 'CENTER'; break;
-                case 'space-between': frame.primaryAxisAlignItems = 'SPACE_BETWEEN'; break;
-                case 'end': case 'flex-end': frame.primaryAxisAlignItems = 'MAX'; break;
-                default: frame.primaryAxisAlignItems = 'MIN';
-            }
-        } else if (s.display === 'flex') {
+        if (s.display === 'flex') {
             frame.layoutMode = s.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
-            
-            // Handle flex-wrap
-            if (s.flexWrap === 'wrap' || s.flexWrap === 'wrap-reverse') {
-                frame.layoutWrap = 'WRAP';
-                frame.counterAxisSpacing = s.rowGap || s.gap || 0;
-            }
-            
-            frame.itemSpacing = s.columnGap || s.gap || 0;
+            frame.itemSpacing = s.gap || 0;
             frame.paddingTop = s.padding?.top || 0;
             frame.paddingRight = s.padding?.right || 0;
             frame.paddingBottom = s.padding?.bottom || 0;
