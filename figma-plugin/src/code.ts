@@ -61,9 +61,139 @@ async function loadFonts() {
     await figma.loadFontAsync({ family: "Roboto", style: "Regular" });
 }
 
+// --- HELPER: Parse Box Shadow ---
+function parseBoxShadow(shadowStr: string): Effect[] {
+    if (!shadowStr || shadowStr === 'none') return [];
+
+    const effects: Effect[] = [];
+    // Split by comma, ignoring commas inside parentheses (rgb/a)
+    const shadows = shadowStr.split(/,(?![^()]*\))/);
+
+    for (const shadow of shadows) {
+        const s = shadow.trim();
+        // Regex to extract color and lengths: 
+        // matches: rgba?(...) | #...  AND  ...px ...px ...px ...px
+        // Simplified approach: Extract color, then remove it, then parse numbers.
+
+        let color = { r: 0, g: 0, b: 0, a: 0.2 }; // default
+        let remaining = s;
+
+        // Try RGBA/RGB
+        const colorMatch = s.match(/rgba?\(.*?\)/) || s.match(/#[a-fA-F0-9]{3,6}/);
+        if (colorMatch) {
+            // We need a helper to parse RGB string to objects, but for now let's assume standard format
+            // Just clearing it from string to parse dimensions
+            remaining = s.replace(colorMatch[0], '').trim();
+            // TODO: Proper color parsing if strict fidelity needed. 
+            // For now, default black shadow is better than nothing, or try to enable basic parsing?
+            // Let's rely on a basic extraction if possible.
+            if (colorMatch[0].startsWith('rgba')) {
+                const numbers = colorMatch[0].match(/[\d.]+/g)?.map(Number);
+                if (numbers && numbers.length >= 3) {
+                    color = { r: numbers[0] / 255, g: numbers[1] / 255, b: numbers[2] / 255, a: numbers[3] ?? 1 };
+                }
+            } else if (colorMatch[0].startsWith('rgb')) {
+                const numbers = colorMatch[0].match(/[\d.]+/g)?.map(Number);
+                if (numbers && numbers.length >= 3) {
+                    color = { r: numbers[0] / 255, g: numbers[1] / 255, b: numbers[2] / 255, a: 1 };
+                }
+            }
+        }
+
+        const parts = remaining.split(/\s+/).map(p => parseFloat(p));
+        // CSS: offset-x | offset-y | blur-radius | spread-radius
+        // Figma: DropShadowEffect
+        if (parts.length >= 2) {
+            effects.push({
+                type: 'DROP_SHADOW',
+                color: color,
+                offset: { x: parts[0] || 0, y: parts[1] || 0 },
+                radius: parts[2] || 0,
+                spread: parts[3] || 0,
+                visible: true,
+                blendMode: 'NORMAL'
+            });
+        }
+    }
+    return effects;
+}
+
+// --- HELPER: Text Case & Decoration ---
+function getTextCase(transform: string): TextCase {
+    if (transform === 'uppercase') return 'UPPER';
+    if (transform === 'lowercase') return 'LOWER';
+    if (transform === 'capitalize') return 'TITLE';
+    return 'ORIGINAL';
+}
+
+function getTextDecoration(decoration: string): TextDecoration {
+    if (decoration && decoration.includes('underline')) return 'UNDERLINE';
+    if (decoration && decoration.includes('line-through')) return 'STRIKETHROUGH';
+    return 'NONE';
+}
+
+// --- HELPER: Parse Gradient ---
+function parseGradient(gradientStr: string): GradientPaint | null {
+    if (!gradientStr || !gradientStr.includes('linear-gradient')) return null;
+
+    // Simplified Gradient Parsing
+    // CSS: linear-gradient(deg, color stop, color stop)
+    // Figma: GradientPaint... 
+
+    // 1. Extract Colors
+    // Regex matches rgba?(...) or #...
+    const colors: RGB[] = [];
+    const colorMatches = gradientStr.match(/rgba?\(.*?\)|#[a-fA-F0-9]{3,6}/g);
+
+    if (colorMatches && colorMatches.length >= 2) {
+        colorMatches.slice(0, 3).forEach(c => { // Limit to 3 stops for simplicity
+            // Parse Color
+            let r = 0, g = 0, b = 0, a = 1;
+            if (c.startsWith('rgba')) {
+                const nums = c.match(/[\d.]+/g)?.map(Number);
+                if (nums && nums.length >= 3) {
+                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255; a = nums[3] ?? 1;
+                }
+            } else if (c.startsWith('rgb')) {
+                const nums = c.match(/[\d.]+/g)?.map(Number);
+                if (nums && nums.length >= 3) {
+                    r = nums[0] / 255; g = nums[1] / 255; b = nums[2] / 255; a = 1;
+                }
+            } else if (c.startsWith('#')) {
+                // hex parsing placeholder, default to mid-grey if fail
+                // actually lets support hex roughly
+                if (c.length === 7) {
+                    r = parseInt(c.slice(1, 3), 16) / 255;
+                    g = parseInt(c.slice(3, 5), 16) / 255;
+                    b = parseInt(c.slice(5, 7), 16) / 255;
+                }
+            }
+            colors.push({ r, g, b });
+        });
+    }
+
+    if (colors.length < 2) return null;
+
+    // Construct Gradient Stops
+    const stops: ColorStop[] = colors.map((c, i) => ({
+        position: i / (colors.length - 1),
+        color: { ...c, a: 1 } // Figma alpha usually 1 for gradient stops unless transparent gradient
+    }));
+
+    // TODO: Parse angle to set handle positions. Defaulting to Top-Bottom.
+    return {
+        type: 'GRADIENT_LINEAR',
+        gradientStops: stops,
+        gradientTransform: [[0, 1, 0], [-1, 0, 1]] // 90deg rotation approximately
+    };
+}
+
+
 // Main Build Function
 async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: any) {
     if (!data) return;
+
+    // ... (Image logic)
 
     let node: SceneNode;
     const s = data.styles || {};
@@ -82,18 +212,42 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
                 rect.fills = [{ type: 'IMAGE', scaleMode: 'FILL', imageHash }];
             }
         }
-        // Size will be set later via resize/resizeWithoutConstraints
+
+        // Apply Shadows to Image too if present
+        if (s.boxShadow) {
+            node.effects = parseBoxShadow(s.boxShadow);
+        }
+
     }
     else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
         const text = figma.createText();
         node = text;
         await figma.loadFontAsync({ family: "Inter", style: "Regular" }); // Fallback
+
+        // Character Content
         text.characters = data.content || "";
 
-        // Apply text styles if available (simplified)
+        // Basic Color/Size
         if (s.fontSize) text.fontSize = s.fontSize;
         if (s.color) {
             text.fills = [{ type: 'SOLID', color: s.color }];
+        }
+
+        // Advanced Typography
+        if (s.letterSpacing) {
+            text.letterSpacing = { value: s.letterSpacing, unit: 'PIXELS' };
+        }
+        if (s.textTransform) {
+            text.textCase = getTextCase(s.textTransform);
+        }
+        if (s.textDecoration) {
+            text.textDecoration = getTextDecoration(s.textDecoration);
+        }
+
+        // Shadows on text? CSS supports text-shadow (not box-shadow usually), 
+        // but sometimes we get box-shadow on span. Let's try.
+        if (s.boxShadow) {
+            node.effects = parseBoxShadow(s.boxShadow);
         }
     }
     else if (data.type === 'FRAME') {
@@ -112,8 +266,23 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
                 const bgHash = figma.createImage(bgBytes).hash;
                 fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: bgHash });
             }
+        } else if (s.backgroundImage && s.backgroundImage.type === 'GRADIENT') {
+            const gradient = parseGradient(s.backgroundImage.raw);
+            if (gradient) fills.push(gradient);
         }
         frame.fills = fills.length > 0 ? fills : [];
+
+        if (s.boxShadow) {
+            frame.effects = parseBoxShadow(s.boxShadow);
+        }
+
+        // Borders -> Strokes
+        if (s.border && s.border.width > 0 && s.border.color) {
+            frame.strokes = [{ type: 'SOLID', color: s.border.color }];
+            frame.strokeWeight = s.border.width;
+            // Align strokes to inside usually for web box-sizing: border-box
+            frame.strokeAlign = 'INSIDE';
+        }
 
         // Clipping
         if (s.overflowX === 'hidden' || s.overflowY === 'hidden') {
@@ -142,7 +311,7 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
 
     // Append to parent BEFORE setting absolute positioning
     // (Layout positioning requires parent)
-    if (parent.type !== 'PAGE' && parent.type !== 'DOCUMENT') {
+    if (parent.type !== 'PAGE') {
         (parent as FrameNode | GroupNode | ComponentNode).appendChild(node);
     } else {
         (parent as PageNode).appendChild(node);

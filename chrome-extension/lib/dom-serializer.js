@@ -110,9 +110,23 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 fontFamily: computed.fontFamily,
                 lineHeight: computed.lineHeight,
                 textAlign: computed.textAlign,
-                opacity: parseFloat(computed.opacity) || 1, // New
-                overflowX: computed.overflowX, // New
-                overflowY: computed.overflowY, // New
+                opacity: parseFloat(computed.opacity) || 1,
+
+                // Borders
+                border: {
+                    width: parseUnit(computed.borderWidth),
+                    color: getRgb(computed.borderColor),
+                    style: computed.borderStyle
+                },
+
+                // Advanced Visuals
+                boxShadow: computed.boxShadow !== 'none' ? computed.boxShadow : null,
+                letterSpacing: parseUnit(computed.letterSpacing),
+                textTransform: computed.textTransform,
+                textDecoration: computed.textDecorationLine, // computed style often splits decoration
+
+                overflowX: computed.overflowX,
+                overflowY: computed.overflowY,
             };
 
             // Handling Images
@@ -120,8 +134,24 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 return {
                     type: 'IMAGE',
                     src: el.src,
+                    boxShadow: computed.boxShadow !== 'none' ? computed.boxShadow : null, // Support shadow on img
                     styles,
                     tag: 'img'
+                };
+            }
+
+            // Handling SVGs specific optimization:
+            // Since parsing SVG paths to vector nodes is very complex, we will render them as images.
+            if (el.tagName === 'SVG') {
+                const s = new XMLSerializer();
+                const str = s.serializeToString(el);
+                const base64 = window.btoa(unescape(encodeURIComponent(str)));
+                const dataUri = `data:image/svg+xml;base64,${base64}`;
+                return {
+                    type: 'IMAGE',
+                    src: dataUri,
+                    styles,
+                    tag: 'svg'
                 };
             }
 
