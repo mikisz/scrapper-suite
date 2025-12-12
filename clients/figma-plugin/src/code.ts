@@ -5,9 +5,42 @@ figma.showUI(__html__, { width: 300, height: 450 });
 // Progress tracking
 let totalNodes = 0;
 let processedNodes = 0;
+let warnings: string[] = [];
+let errors: string[] = [];
 
 function sendProgress(stage: string, percent: number | null = null, detail: string = '', status: string = '') {
     figma.ui.postMessage({ type: 'progress', stage, percent, detail, status });
+}
+
+function sendError(message: string, details?: string) {
+    console.error('Import Error:', message, details);
+    figma.ui.postMessage({ 
+        type: 'error', 
+        message,
+        details,
+        suggestion: getErrorSuggestion(message)
+    });
+}
+
+function sendWarning(message: string) {
+    console.warn('Import Warning:', message);
+    warnings.push(message);
+}
+
+function getErrorSuggestion(error: string): string {
+    if (error.includes('font')) {
+        return 'The font is not available in Figma. Using Inter as fallback.';
+    }
+    if (error.includes('image')) {
+        return 'Some images could not be loaded. They may be protected or unavailable.';
+    }
+    if (error.includes('SVG')) {
+        return 'Some SVGs could not be parsed. They are shown as placeholders.';
+    }
+    if (error.includes('size') || error.includes('resize')) {
+        return 'Some elements have invalid sizes and were skipped.';
+    }
+    return 'Try using the Chrome Extension for protected pages.';
 }
 
 function countNodes(data: any): number {
@@ -68,9 +101,14 @@ function extractImageUrls(node: any, urls: Set<string>): void {
         urls.add(styles.backgroundImage.url);
     }
     
-    // Pseudo-elements with background images
-    if (node.type === 'PSEUDO_ELEMENT' && node.contentType === 'IMAGE') {
-        if (styles.backgroundImage && styles.backgroundImage.url) {
+    // Pseudo-elements with images
+    if (node.type === 'PSEUDO_ELEMENT') {
+        // content: url() images
+        if (node.imageUrl) {
+            urls.add(node.imageUrl);
+        }
+        // Background images
+        if (styles.backgroundImage && styles.backgroundImage.type === 'IMAGE' && styles.backgroundImage.url) {
             urls.add(styles.backgroundImage.url);
         }
     }
@@ -115,30 +153,87 @@ figma.ui.onmessage = async (msg) => {
     if (msg.type === 'build') {
         const rootData = msg.data;
         
+        // Reset state
+        warnings = [];
+        errors = [];
+        
+        // Validate input data
+        if (!rootData) {
+            sendError('No data to import', 'The data object is empty or undefined.');
+            return;
+        }
+        
+        if (!rootData.type) {
+            sendError('Invalid data format', 'Expected a visual tree with a "type" field. Make sure you\'re using the Chrome Extension output.');
+            return;
+        }
+        
         // Count total nodes for progress tracking
         totalNodes = countNodes(rootData);
         processedNodes = 0;
         
+        if (totalNodes === 0) {
+            sendError('Empty page', 'The scraped page has no visible content. Try a different page.');
+            return;
+        }
+        
         // Clear cache from previous imports
         imageCache.clear();
         
-        // Step 1: Load fonts
-        sendProgress('Loading fonts', 25, '', 'Preparing fonts...');
-        await loadFonts(rootData);
-        
-        // Step 2: Preload all images in parallel
-        const urls = new Set<string>();
-        extractImageUrls(rootData, urls);
-        if (urls.size > 0) {
-            sendProgress('Loading images', 50, `0/${urls.size} images`, 'Downloading images in parallel...');
-            await preloadImages(rootData);
+        try {
+            // Step 1: Load fonts
+            sendProgress('Loading fonts', 10, '', 'Preparing fonts...');
+            await loadFonts(rootData);
+            sendProgress('Loading fonts', 25, '', 'Fonts ready');
+            
+            // Step 2: Preload all images in parallel
+            const urls = new Set<string>();
+            extractImageUrls(rootData, urls);
+            if (urls.size > 0) {
+                sendProgress('Loading images', 30, `0/${urls.size} images`, 'Downloading images in parallel...');
+                await preloadImages(rootData);
+                
+                // Check how many images loaded successfully
+                const loadedCount = Array.from(imageCache.values()).filter(v => v !== null).length;
+                if (loadedCount < urls.size) {
+                    sendWarning(`${urls.size - loadedCount} of ${urls.size} images could not be loaded`);
+                }
+                sendProgress('Loading images', 50, `${loadedCount}/${urls.size} loaded`, 'Images ready');
+            }
+            
+            // Step 3: Build the node tree (images are now cached)
+            sendProgress('Building layout', 55, `0/${totalNodes} nodes`, 'Creating Figma layers...');
+            const rootNode = await buildNode(rootData, figma.currentPage, undefined);
+            
+            // Success! Select the imported content
+            if (rootNode) {
+                figma.currentPage.selection = [rootNode];
+                figma.viewport.scrollAndZoomIntoView([rootNode]);
+            }
+            
+            // Send completion with summary
+            const summary: any = {
+                type: 'done',
+                stats: {
+                    totalNodes: processedNodes,
+                    imagesLoaded: Array.from(imageCache.values()).filter(v => v !== null).length,
+                    totalImages: imageCache.size,
+                },
+            };
+            
+            if (warnings.length > 0) {
+                summary.warnings = warnings;
+            }
+            
+            figma.ui.postMessage(summary);
+            
+        } catch (error: any) {
+            console.error('Build error:', error);
+            sendError(
+                'Failed to build layout',
+                error.message || 'An unexpected error occurred during import.'
+            );
         }
-        
-        // Step 3: Build the node tree (images are now cached)
-        sendProgress('Building layout', 30, `0/${totalNodes} nodes`, 'Creating Figma layers...');
-        await buildNode(rootData, figma.currentPage, undefined);
-        
-        figma.ui.postMessage({ type: 'done' });
     }
 };
 
@@ -505,6 +600,192 @@ function parseGradient(gradientStr: string): GradientPaint | null {
     return null;
 }
 
+// --- HELPERS: CSS Grid Parsing ---
+interface GridTrackInfo {
+    count: number;
+    tracks: { value: number; unit: 'px' | 'fr' | 'auto' | 'minmax' }[];
+    hasAutoFit: boolean;
+    hasAutoFill: boolean;
+}
+
+/**
+ * Parse CSS grid-template-columns/rows value into structured data
+ * Handles: repeat(n, value), fr units, px, auto, minmax()
+ */
+function parseGridTemplate(template: string | undefined, containerSize: number = 0): GridTrackInfo {
+    const result: GridTrackInfo = {
+        count: 0,
+        tracks: [],
+        hasAutoFit: false,
+        hasAutoFill: false,
+    };
+    
+    if (!template || template === 'none') {
+        return result;
+    }
+    
+    // Handle repeat() function
+    const repeatMatch = template.match(/repeat\(\s*(auto-fill|auto-fit|\d+)\s*,\s*(.+?)\s*\)/i);
+    if (repeatMatch) {
+        const repeatCount = repeatMatch[1];
+        const repeatValue = repeatMatch[2].trim();
+        
+        if (repeatCount === 'auto-fit') {
+            result.hasAutoFit = true;
+            // For auto-fit, estimate columns based on minmax if available
+            const minmaxMatch = repeatValue.match(/minmax\(\s*(\d+)(?:px)?\s*,/);
+            if (minmaxMatch && containerSize > 0) {
+                const minWidth = parseInt(minmaxMatch[1]);
+                result.count = Math.max(1, Math.floor(containerSize / minWidth));
+            } else {
+                result.count = 3; // Default fallback
+            }
+        } else if (repeatCount === 'auto-fill') {
+            result.hasAutoFill = true;
+            const minmaxMatch = repeatValue.match(/minmax\(\s*(\d+)(?:px)?\s*,/);
+            if (minmaxMatch && containerSize > 0) {
+                const minWidth = parseInt(minmaxMatch[1]);
+                result.count = Math.max(1, Math.floor(containerSize / minWidth));
+            } else {
+                result.count = 3; // Default fallback
+            }
+        } else {
+            result.count = parseInt(repeatCount) || 1;
+        }
+        
+        // Parse the repeated value
+        const trackInfo = parseTrackValue(repeatValue);
+        for (let i = 0; i < result.count; i++) {
+            result.tracks.push(trackInfo);
+        }
+        
+        return result;
+    }
+    
+    // Handle space-separated values (e.g., "100px 1fr 200px")
+    // Need to handle minmax() which contains spaces
+    const tracks = splitGridTracks(template);
+    
+    for (const track of tracks) {
+        const trackInfo = parseTrackValue(track);
+        result.tracks.push(trackInfo);
+    }
+    
+    result.count = result.tracks.length;
+    return result;
+}
+
+/**
+ * Split grid template into individual tracks, respecting parentheses
+ */
+function splitGridTracks(template: string): string[] {
+    const tracks: string[] = [];
+    let current = '';
+    let parenDepth = 0;
+    
+    for (const char of template) {
+        if (char === '(') {
+            parenDepth++;
+            current += char;
+        } else if (char === ')') {
+            parenDepth--;
+            current += char;
+        } else if (char === ' ' && parenDepth === 0) {
+            if (current.trim()) {
+                tracks.push(current.trim());
+            }
+            current = '';
+        } else {
+            current += char;
+        }
+    }
+    
+    if (current.trim()) {
+        tracks.push(current.trim());
+    }
+    
+    return tracks;
+}
+
+/**
+ * Parse a single track value (e.g., "1fr", "100px", "auto", "minmax(100px, 1fr)")
+ */
+function parseTrackValue(value: string): { value: number; unit: 'px' | 'fr' | 'auto' | 'minmax' } {
+    const trimmed = value.trim();
+    
+    if (trimmed === 'auto') {
+        return { value: 0, unit: 'auto' };
+    }
+    
+    if (trimmed.startsWith('minmax')) {
+        // For minmax, use the min value as a hint
+        const match = trimmed.match(/minmax\(\s*(\d+)(?:px)?\s*,/);
+        if (match) {
+            return { value: parseInt(match[1]), unit: 'minmax' };
+        }
+        return { value: 0, unit: 'minmax' };
+    }
+    
+    if (trimmed.endsWith('fr')) {
+        return { value: parseFloat(trimmed) || 1, unit: 'fr' };
+    }
+    
+    if (trimmed.endsWith('px')) {
+        return { value: parseFloat(trimmed) || 0, unit: 'px' };
+    }
+    
+    if (trimmed.endsWith('%')) {
+        // Convert percentage to approximate pixels (assuming container context)
+        return { value: parseFloat(trimmed) || 0, unit: 'px' };
+    }
+    
+    // Try parsing as number (default to px)
+    const num = parseFloat(trimmed);
+    if (!isNaN(num)) {
+        return { value: num, unit: 'px' };
+    }
+    
+    return { value: 0, unit: 'auto' };
+}
+
+/**
+ * Parse grid-column or grid-row value to extract span information
+ * Examples: "1", "span 2", "1 / 3", "1 / span 2"
+ */
+function parseGridSpan(value: string | undefined): { start: number; span: number } {
+    if (!value || value === 'auto') {
+        return { start: 0, span: 1 };
+    }
+    
+    // Handle "span N" format
+    const spanMatch = value.match(/span\s+(\d+)/);
+    if (spanMatch) {
+        return { start: 0, span: parseInt(spanMatch[1]) || 1 };
+    }
+    
+    // Handle "start / end" format
+    const slashMatch = value.match(/(\d+)\s*\/\s*(\d+)/);
+    if (slashMatch) {
+        const start = parseInt(slashMatch[1]) || 1;
+        const end = parseInt(slashMatch[2]) || start + 1;
+        return { start: start, span: end - start };
+    }
+    
+    // Handle "start / span N" format
+    const startSpanMatch = value.match(/(\d+)\s*\/\s*span\s+(\d+)/);
+    if (startSpanMatch) {
+        return { start: parseInt(startSpanMatch[1]) || 1, span: parseInt(startSpanMatch[2]) || 1 };
+    }
+    
+    // Single number
+    const num = parseInt(value);
+    if (!isNaN(num)) {
+        return { start: num, span: 1 };
+    }
+    
+    return { start: 0, span: 1 };
+}
+
 
 // Main Build Function
 async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: any) {
@@ -523,27 +804,121 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     // --- 1. CREATE NODE BASED ON TYPE ---
     if (data.type === 'VECTOR') {
         // SVG element - create editable vector from SVG string
+        let svgParsed = false;
+        
         try {
-            const svgNode = figma.createNodeFromSvg(data.svgString);
+            // Clean up SVG string for better Figma compatibility
+            let cleanedSvg = data.svgString;
+            
+            // Remove problematic attributes that Figma doesn't handle well
+            cleanedSvg = cleanedSvg.replace(/\s*xmlns:xlink="[^"]*"/g, '');
+            cleanedSvg = cleanedSvg.replace(/\s*class="[^"]*"/g, '');
+            cleanedSvg = cleanedSvg.replace(/\s*data-[a-z-]+="[^"]*"/g, '');
+            
+            // Ensure there's an xmlns attribute for SVG namespace
+            if (!cleanedSvg.includes('xmlns="')) {
+                cleanedSvg = cleanedSvg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+            
+            // Remove inline styles that might cause issues (Figma handles style differently)
+            // But keep stroke and fill attributes
+            cleanedSvg = cleanedSvg.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+            
+            // Try to create the vector node
+            const svgNode = figma.createNodeFromSvg(cleanedSvg);
             svgNode.name = 'SVG';
             node = svgNode;
+            svgParsed = true;
 
             // Apply size from styles if available
             if (s.width && s.height && s.width > 0 && s.height > 0) {
-                svgNode.resize(s.width, s.height);
+                // Maintain aspect ratio if viewBox is defined
+                if (data.viewBox) {
+                    const viewBoxParts = data.viewBox.split(/\s+/).map(Number);
+                    if (viewBoxParts.length === 4) {
+                        const vbWidth = viewBoxParts[2];
+                        const vbHeight = viewBoxParts[3];
+                        const aspectRatio = vbWidth / vbHeight;
+                        
+                        // Use the smaller dimension to fit within bounds
+                        const targetWidth = s.width;
+                        const targetHeight = s.height;
+                        
+                        if (targetWidth / targetHeight > aspectRatio) {
+                            // Height-constrained
+                            svgNode.resize(targetHeight * aspectRatio, targetHeight);
+                        } else {
+                            // Width-constrained
+                            svgNode.resize(targetWidth, targetWidth / aspectRatio);
+                        }
+                    } else {
+                        svgNode.resize(s.width, s.height);
+                    }
+                } else {
+                    svgNode.resize(s.width, s.height);
+                }
             }
 
             // Apply shadows if present
             if (s.boxShadow) {
                 svgNode.effects = parseBoxShadow(s.boxShadow);
             }
+            
+            // Apply fill color override if specified and SVG is a simple icon
+            if (data.svgFill && svgNode.children && svgNode.children.length <= 5) {
+                // Only apply to simple SVGs to avoid messing up complex illustrations
+                try {
+                    for (const child of svgNode.findAll()) {
+                        if ('fills' in child && (child as GeometryMixin).fills) {
+                            const fills = (child as GeometryMixin).fills as readonly Paint[];
+                            if (fills.length > 0 && fills[0].type === 'SOLID') {
+                                (child as GeometryMixin).fills = [{
+                                    type: 'SOLID',
+                                    color: data.svgFill
+                                }];
+                            }
+                        }
+                    }
+                } catch {
+                    // Ignore fill application errors
+                }
+            }
         } catch (e) {
-            // Fallback: If SVG parsing fails, create a placeholder rectangle
-            console.warn('Failed to parse SVG, creating placeholder:', e);
-            const rect = figma.createRectangle();
-            rect.name = 'SVG (failed to parse)';
-            rect.fills = [{ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } }];
-            node = rect;
+            // SVG parsing failed
+            svgParsed = false;
+        }
+        
+        if (!svgParsed) {
+            // Fallback: If SVG parsing fails, try simplified cleanup
+            try {
+                // Extract just path data and try again
+                const pathMatch = data.svgString.match(/<path[^>]*d="([^"]+)"[^>]*>/);
+                if (pathMatch) {
+                    const simpleSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${s.width || 24} ${s.height || 24}"><path d="${pathMatch[1]}" fill="currentColor"/></svg>`;
+                    const svgNode = figma.createNodeFromSvg(simpleSvg);
+                    svgNode.name = 'SVG (simplified)';
+                    node = svgNode;
+                    svgParsed = true;
+                    
+                    if (s.width && s.height) {
+                        svgNode.resize(s.width, s.height);
+                    }
+                }
+            } catch {
+                // Second attempt also failed
+            }
+            
+            if (!svgParsed) {
+                // Ultimate fallback: Create a placeholder with an indicator
+                console.warn('Failed to parse SVG, creating placeholder');
+                const rect = figma.createRectangle();
+                rect.name = 'SVG (parse failed)';
+                rect.fills = [{ type: 'SOLID', color: { r: 0.95, g: 0.95, b: 0.95 } }];
+                rect.strokes = [{ type: 'SOLID', color: { r: 0.8, g: 0.8, b: 0.8 } }];
+                rect.strokeWeight = 1;
+                rect.strokeAlign = 'INSIDE';
+                node = rect;
+            }
         }
     }
     else if (data.type === 'IMAGE') {
@@ -588,11 +963,22 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             if (s.color) {
                 text.fills = [{ type: 'SOLID', color: s.color }];
             }
+            
+            // Apply letter spacing
+            if (s.letterSpacing) {
+                text.letterSpacing = { value: s.letterSpacing, unit: 'PIXELS' };
+            }
+            
+            // Apply text transform
+            if (s.textTransform) {
+                text.textCase = getTextCase(s.textTransform);
+            }
+            
             if (s.boxShadow) {
                 text.effects = parseBoxShadow(s.boxShadow);
             }
         } else {
-            // Decorative or image pseudo-element - create a frame
+            // Decorative, gradient, or image pseudo-element - create a frame
             const frame = figma.createFrame();
             frame.name = `::${pseudoName.toLowerCase()}`;
             node = frame;
@@ -602,7 +988,17 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             if (s.backgroundColor) {
                 fills.push({ type: 'SOLID', color: s.backgroundColor, opacity: s.opacity });
             }
-            if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
+            
+            // Handle content: url() images
+            if (data.imageUrl) {
+                const imgBytes = imageCache.get(data.imageUrl);
+                if (imgBytes) {
+                    const imgHash = figma.createImage(imgBytes).hash;
+                    fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: imgHash });
+                }
+            }
+            // Handle background-image
+            else if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
                 const bgBytes = imageCache.get(s.backgroundImage.url);
                 if (bgBytes) {
                     const bgHash = figma.createImage(bgBytes).hash;
@@ -632,6 +1028,14 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
                 frame.strokes = [{ type: 'SOLID', color: s.border.color }];
                 frame.strokeWeight = s.border.width;
                 frame.strokeAlign = 'INSIDE';
+            }
+            
+            // Set reasonable default size for pseudo-elements
+            if (s.width === 'auto' || !s.width || s.width === 0) {
+                // If no explicit width, use a default or inherit from content
+                if (data.contentType === 'IMAGE' || data.contentType === 'GRADIENT') {
+                    frame.resize(24, 24); // Default icon size
+                }
             }
         }
     }
@@ -771,29 +1175,50 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     if (data.type === 'FRAME' && node.type === 'FRAME') {
         const frame = node;
         
-        // Helper to count grid columns from template
-        const countGridColumns = (template: string | undefined): number => {
-            if (!template || template === 'none') return 1;
-            const repeatMatch = template.match(/repeat\(\s*(\d+)/);
-            if (repeatMatch) return parseInt(repeatMatch[1]) || 1;
-            return template.trim().split(/\s+/).filter(p => p && p !== 'none').length || 1;
-        };
-        
         if (s.display === 'grid') {
-            // CSS Grid -> Figma Auto Layout with Wrap
-            const columns = countGridColumns(s.gridTemplateColumns);
+            // Parse grid template for better understanding
+            const containerWidth = s.width || 0;
+            const gridInfo = parseGridTemplate(s.gridTemplateColumns, containerWidth);
+            const columns = gridInfo.count || 1;
+            
+            // Calculate available width for grid items (excluding padding)
+            const paddingH = (s.padding?.left || 0) + (s.padding?.right || 0);
+            const columnGap = s.columnGap || s.gap || 0;
+            const availableWidth = containerWidth - paddingH;
+            
+            // Store grid info for children to use (via parentData in recursion)
+            (data as any)._gridInfo = {
+                columns,
+                tracks: gridInfo.tracks,
+                containerWidth: availableWidth,
+                columnGap,
+                rowGap: s.rowGap || s.gap || 0,
+            };
             
             if (columns > 1) {
                 // Multi-column grid: Use HORIZONTAL with WRAP
                 frame.layoutMode = 'HORIZONTAL';
                 frame.layoutWrap = 'WRAP';
+                
+                // For grids with fixed or fr columns, we need to size children appropriately
+                // Check if all tracks use fr units
+                const allFr = gridInfo.tracks.length > 0 && gridInfo.tracks.every(t => t.unit === 'fr');
+                const allPx = gridInfo.tracks.length > 0 && gridInfo.tracks.every(t => t.unit === 'px');
+                
+                if (allFr) {
+                    // All fr units: children will fill based on fr values
+                    // We'll handle this in child processing
+                } else if (allPx) {
+                    // All px: children have fixed widths
+                    // We'll apply these widths in child processing
+                }
             } else {
                 // Single column or row-based: Use VERTICAL
                 frame.layoutMode = 'VERTICAL';
             }
             
             // Gap handling (CSS Grid has separate column-gap and row-gap)
-            frame.itemSpacing = s.columnGap || s.gap || 0;
+            frame.itemSpacing = columnGap;
             frame.counterAxisSpacing = s.rowGap || s.gap || 0;
             
             // Padding
@@ -802,15 +1227,20 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             frame.paddingBottom = s.padding?.bottom || 0;
             frame.paddingLeft = s.padding?.left || 0;
             
-            // Alignment
-            switch (s.alignItems) {
+            // Alignment - map CSS align-items/justify-items/place-items
+            const alignItems = s.alignItems || 'stretch';
+            switch (alignItems) {
                 case 'center': frame.counterAxisAlignItems = 'CENTER'; break;
                 case 'end': case 'flex-end': frame.counterAxisAlignItems = 'MAX'; break;
+                case 'start': case 'flex-start': frame.counterAxisAlignItems = 'MIN'; break;
                 default: frame.counterAxisAlignItems = 'MIN';
             }
-            switch (s.justifyContent) {
+            
+            const justifyContent = s.justifyContent || 'start';
+            switch (justifyContent) {
                 case 'center': frame.primaryAxisAlignItems = 'CENTER'; break;
                 case 'space-between': frame.primaryAxisAlignItems = 'SPACE_BETWEEN'; break;
+                case 'space-around': case 'space-evenly': frame.primaryAxisAlignItems = 'SPACE_BETWEEN'; break;
                 case 'end': case 'flex-end': frame.primaryAxisAlignItems = 'MAX'; break;
                 default: frame.primaryAxisAlignItems = 'MIN';
             }
@@ -850,7 +1280,64 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     // --- 4. RECURSION ---
     if (data.children) {
         for (const childData of data.children) {
-            await buildNode(childData, node, data);
+            const childNode = await buildNode(childData, node, data);
+            
+            // --- 5. GRID ITEM SIZING ---
+            // If parent is a grid, apply grid-specific sizing to this child
+            if (childNode && s.display === 'grid' && (data as any)._gridInfo) {
+                const gridInfo = (data as any)._gridInfo;
+                const childStyles = childData.styles || {};
+                
+                // Parse grid-column span
+                const colSpan = parseGridSpan(childStyles.gridColumn || childStyles.gridColumnStart);
+                const actualSpan = Math.min(colSpan.span, gridInfo.columns);
+                
+                // Calculate width based on track sizes and span
+                if (gridInfo.tracks.length > 0 && childNode.type === 'FRAME') {
+                    const totalFr = gridInfo.tracks.reduce((sum: number, t: any) => 
+                        t.unit === 'fr' ? sum + t.value : sum, 0);
+                    const totalPx = gridInfo.tracks.reduce((sum: number, t: any) => 
+                        t.unit === 'px' ? sum + t.value : sum, 0);
+                    const totalGaps = (gridInfo.columns - 1) * gridInfo.columnGap;
+                    const availableForFr = gridInfo.containerWidth - totalPx - totalGaps;
+                    
+                    // Calculate width for this item
+                    let itemWidth = 0;
+                    const startIdx = 0; // Simplified: assume sequential placement
+                    
+                    for (let i = 0; i < actualSpan && i < gridInfo.tracks.length; i++) {
+                        const track = gridInfo.tracks[startIdx + i];
+                        if (!track) continue;
+                        
+                        if (track.unit === 'fr') {
+                            itemWidth += (track.value / totalFr) * availableForFr;
+                        } else if (track.unit === 'px') {
+                            itemWidth += track.value;
+                        } else if (track.unit === 'minmax') {
+                            // Use min value as approximation
+                            itemWidth += track.value || (availableForFr / gridInfo.columns);
+                        } else {
+                            // Auto: divide available space equally
+                            itemWidth += availableForFr / gridInfo.columns;
+                        }
+                        
+                        // Add gap between spanned columns
+                        if (i > 0) {
+                            itemWidth += gridInfo.columnGap;
+                        }
+                    }
+                    
+                    // Apply calculated width if reasonable
+                    if (itemWidth > 0) {
+                        try {
+                            const currentHeight = childNode.height || 100;
+                            childNode.resize(Math.max(1, itemWidth), Math.max(1, currentHeight));
+                        } catch (e) {
+                            // Resize might fail for certain node types, ignore
+                        }
+                    }
+                }
+            }
         }
     }
 

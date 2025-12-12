@@ -61,7 +61,19 @@ export async function POST(request: Request) {
     const zipPath = path.join(process.cwd(), 'downloads', `llm_${jobId}.zip`);
 
     try {
-        const body = await request.json();
+        let body;
+        try {
+            body = await request.json();
+        } catch {
+            return NextResponse.json(
+                { 
+                    error: 'Invalid request format',
+                    suggestion: 'Please send a valid JSON body with a "url" field.'
+                }, 
+                { status: 400 }
+            );
+        }
+        
         const { url, format, cleanup, includePdf } = body;
         // format: 'markdown' | 'html'
         // cleanup: 'article' | 'full'
@@ -69,7 +81,13 @@ export async function POST(request: Request) {
         // Validate URL format and security
         const validation = validateScrapingUrl(url);
         if (!validation.valid) {
-            return NextResponse.json({ error: validation.error }, { status: 400 });
+            return NextResponse.json(
+                { 
+                    error: validation.error,
+                    suggestion: 'Please provide a valid public URL starting with http:// or https://'
+                }, 
+                { status: 400 }
+            );
         }
 
         await fs.ensureDir(jobDir);
@@ -186,6 +204,41 @@ export async function POST(request: Request) {
     } catch (error: any) {
         console.error('LLM Scraper error:', error);
         if (browser) await browserPool.release(browser);
-        return NextResponse.json({ error: error.message || 'Processing failed' }, { status: 500 });
+        
+        // Clean up any partial files
+        try {
+            await fs.remove(jobDir).catch(() => {});
+            await fs.remove(zipPath).catch(() => {});
+        } catch {
+            // Ignore cleanup errors
+        }
+        
+        // User-friendly error messages
+        const errorMessage = error.message || '';
+        let userError = 'Processing failed';
+        let suggestion = 'Please try again or use a different URL.';
+        
+        if (errorMessage.includes('net::ERR_NAME_NOT_RESOLVED')) {
+            userError = 'Could not find this website';
+            suggestion = 'Please check the URL is spelled correctly.';
+        } else if (errorMessage.includes('net::ERR_CONNECTION')) {
+            userError = 'Could not connect to the website';
+            suggestion = 'The website may be down or blocking access.';
+        } else if (errorMessage.includes('Timeout') || errorMessage.includes('timeout')) {
+            userError = 'Page load timeout';
+            suggestion = 'The page took too long to load. Try again or use a simpler page.';
+        } else if (errorMessage.includes('net::ERR_')) {
+            userError = 'Network error';
+            suggestion = 'Could not access the website. It may be protected or unavailable.';
+        }
+        
+        return NextResponse.json(
+            { 
+                error: userError, 
+                suggestion,
+                details: errorMessage 
+            }, 
+            { status: 500 }
+        );
     }
 }
