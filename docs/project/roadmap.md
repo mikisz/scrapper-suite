@@ -11,4 +11,6 @@
         - [x] Manifest v3 <!-- id: 20 -->
         - [x] Content Script (injects `analyzeNode`) <!-- id: 21 -->
         - [x] Popup UI (Scan button -> JSON copy) <!-- id: 22 -->
-    - [ ] Update Scraper API to accept JSON payload directly (bypass Puppeteer) <!-- id: 23 -->
+    - [x] **Phase 3: Integration & Polish** <!-- id: 23 -->
+        - [x] Update Figma Plugin to accept pasted JSON <!-- id: 24 -->
+        - [x] Replace Docker build with `ghcr.io/puppeteer/puppeteer` <!-- id: 25 -->
