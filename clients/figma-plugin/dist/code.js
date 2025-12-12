@@ -62,16 +62,104 @@ var __async = (__this, __arguments, generator) => {
     }
     if (msg.type === "build") {
       const rootData = msg.data;
-      yield loadFonts();
+      yield loadFonts(rootData);
       yield buildNode(rootData, figma.currentPage, void 0);
       figma.ui.postMessage({ type: "done" });
     }
   });
-  function loadFonts() {
+  const loadedFonts = /* @__PURE__ */ new Set();
+  const FALLBACK_FONT = { family: "Inter", style: "Regular" };
+  const FALLBACK_FONT_BOLD = { family: "Inter", style: "Bold" };
+  function parseFontFamily(fontFamily) {
+    if (!fontFamily) return FALLBACK_FONT.family;
+    const fonts = fontFamily.split(",").map((f) => f.trim());
+    let primary = fonts[0] || FALLBACK_FONT.family;
+    primary = primary.replace(/^["']|["']$/g, "");
+    const generics = ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "-apple-system", "BlinkMacSystemFont"];
+    if (generics.includes(primary.toLowerCase())) {
+      return FALLBACK_FONT.family;
+    }
+    return primary;
+  }
+  function getFontStyle(weight) {
+    const w = typeof weight === "string" ? parseInt(weight) || 400 : weight;
+    if (w <= 100) return "Thin";
+    if (w <= 200) return "ExtraLight";
+    if (w <= 300) return "Light";
+    if (w <= 400) return "Regular";
+    if (w <= 500) return "Medium";
+    if (w <= 600) return "SemiBold";
+    if (w <= 700) return "Bold";
+    if (w <= 800) return "ExtraBold";
+    return "Black";
+  }
+  function tryLoadFont(family, weight) {
     return __async(this, null, function* () {
-      yield figma.loadFontAsync({ family: "Inter", style: "Regular" });
-      yield figma.loadFontAsync({ family: "Inter", style: "Bold" });
-      yield figma.loadFontAsync({ family: "Roboto", style: "Regular" });
+      const style = getFontStyle(weight);
+      const fontKey = `${family}:${style}`;
+      if (loadedFonts.has(fontKey)) {
+        return { family, style };
+      }
+      try {
+        yield figma.loadFontAsync({ family, style });
+        loadedFonts.add(fontKey);
+        return { family, style };
+      } catch (e) {
+        const styleVariations = ["Regular", "Medium", "Normal", "Book"];
+        if (parseInt(String(weight)) >= 600) {
+          styleVariations.unshift("Bold", "SemiBold", "DemiBold");
+        }
+        for (const altStyle of styleVariations) {
+          const altKey = `${family}:${altStyle}`;
+          if (loadedFonts.has(altKey)) {
+            return { family, style: altStyle };
+          }
+          try {
+            yield figma.loadFontAsync({ family, style: altStyle });
+            loadedFonts.add(altKey);
+            return { family, style: altStyle };
+          } catch (e2) {
+          }
+        }
+      }
+      const fallback = parseInt(String(weight)) >= 600 ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+      const fallbackKey = `${fallback.family}:${fallback.style}`;
+      if (!loadedFonts.has(fallbackKey)) {
+        yield figma.loadFontAsync(fallback);
+        loadedFonts.add(fallbackKey);
+      }
+      return fallback;
+    });
+  }
+  function extractFonts(node, fonts) {
+    if (!node) return;
+    const styles = node.styles || node;
+    if (styles.fontFamily) {
+      const family = parseFontFamily(styles.fontFamily);
+      const weight = styles.fontWeight || "400";
+      fonts.add(`${family}:${weight}`);
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        extractFonts(child, fonts);
+      }
+    }
+  }
+  function loadFonts(rootData) {
+    return __async(this, null, function* () {
+      yield figma.loadFontAsync(FALLBACK_FONT);
+      yield figma.loadFontAsync(FALLBACK_FONT_BOLD);
+      loadedFonts.add(`${FALLBACK_FONT.family}:${FALLBACK_FONT.style}`);
+      loadedFonts.add(`${FALLBACK_FONT_BOLD.family}:${FALLBACK_FONT_BOLD.style}`);
+      if (rootData) {
+        const fonts = /* @__PURE__ */ new Set();
+        extractFonts(rootData, fonts);
+        for (const fontKey of fonts) {
+          const [family, weight] = fontKey.split(":");
+          yield tryLoadFont(family, weight).catch(() => {
+          });
+        }
+      }
     });
   }
   function parseBoxShadow(shadowStr) {
@@ -193,7 +281,10 @@ var __async = (__this, __arguments, generator) => {
       } else if (data.type === "TEXT_NODE" || data.type === "TEXT" && data.content) {
         const text = figma.createText();
         node = text;
-        yield figma.loadFontAsync({ family: "Inter", style: "Regular" });
+        const fontFamily = parseFontFamily(s.fontFamily);
+        const fontWeight = s.fontWeight || "400";
+        const loadedFont = yield tryLoadFont(fontFamily, fontWeight);
+        text.fontName = loadedFont;
         text.characters = data.content || "";
         if (s.fontSize) text.fontSize = s.fontSize;
         if (s.color) {

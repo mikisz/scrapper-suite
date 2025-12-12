@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { browserPool } from '../../lib/browser-pool';
 import fs from 'fs-extra';
 import path from 'path';
 import archiver from 'archiver';
 import { URL } from 'url';
-
-puppeteer.use(StealthPlugin());
 
 const MAX_PAGES_RECURSIVE = 20;
 
@@ -74,11 +71,7 @@ export async function POST(request: Request) {
 
         await fs.ensureDir(downloadDir);
 
-        browser = await puppeteer.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-
+        browser = await browserPool.acquire();
         const page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
 
@@ -121,7 +114,8 @@ export async function POST(request: Request) {
             throw new Error('Invalid mode');
         }
 
-        await browser.close();
+        await page.close();
+        await browserPool.release(browser);
         browser = null;
 
         await zipDirectory(downloadDir, zipPath);
@@ -140,7 +134,7 @@ export async function POST(request: Request) {
 
     } catch (error: any) {
         console.error('Scraping error:', error);
-        if (browser) await browser.close();
+        if (browser) await browserPool.release(browser);
         return NextResponse.json({ error: error.message || 'Scraping failed' }, { status: 500 });
     }
 }

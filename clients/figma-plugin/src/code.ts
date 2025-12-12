@@ -46,7 +46,7 @@ figma.ui.onmessage = async (msg) => {
     // Original Logic
     if (msg.type === 'build') {
         const rootData = msg.data;
-        await loadFonts();
+        await loadFonts(rootData);
         // Create a temporary frame or just append to page?
         // Let's create the root node directly on page
         await buildNode(rootData, figma.currentPage, undefined);
@@ -54,11 +54,139 @@ figma.ui.onmessage = async (msg) => {
     }
 };
 
-async function loadFonts() {
-    // Load common fonts just in case
-    await figma.loadFontAsync({ family: "Inter", style: "Regular" });
-    await figma.loadFontAsync({ family: "Inter", style: "Bold" });
-    await figma.loadFontAsync({ family: "Roboto", style: "Regular" });
+// Font loading with dynamic fallback
+const loadedFonts = new Set<string>();
+const FALLBACK_FONT = { family: "Inter", style: "Regular" };
+const FALLBACK_FONT_BOLD = { family: "Inter", style: "Bold" };
+
+/**
+ * Parse CSS font-family string and return the primary font name
+ * e.g., '"Helvetica Neue", Helvetica, Arial, sans-serif' => 'Helvetica Neue'
+ */
+function parseFontFamily(fontFamily: string): string {
+    if (!fontFamily) return FALLBACK_FONT.family;
+    
+    // Split by comma and get the first font
+    const fonts = fontFamily.split(',').map(f => f.trim());
+    let primary = fonts[0] || FALLBACK_FONT.family;
+    
+    // Remove quotes
+    primary = primary.replace(/^["']|["']$/g, '');
+    
+    // Skip generic font families
+    const generics = ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', '-apple-system', 'BlinkMacSystemFont'];
+    if (generics.includes(primary.toLowerCase())) {
+        return FALLBACK_FONT.family;
+    }
+    
+    return primary;
+}
+
+/**
+ * Map CSS font-weight to Figma style name
+ */
+function getFontStyle(weight: string | number): string {
+    const w = typeof weight === 'string' ? parseInt(weight) || 400 : weight;
+    
+    if (w <= 100) return 'Thin';
+    if (w <= 200) return 'ExtraLight';
+    if (w <= 300) return 'Light';
+    if (w <= 400) return 'Regular';
+    if (w <= 500) return 'Medium';
+    if (w <= 600) return 'SemiBold';
+    if (w <= 700) return 'Bold';
+    if (w <= 800) return 'ExtraBold';
+    return 'Black';
+}
+
+/**
+ * Try to load a font, with fallback to Inter
+ * Returns the font that was successfully loaded
+ */
+async function tryLoadFont(family: string, weight: string | number): Promise<FontName> {
+    const style = getFontStyle(weight);
+    const fontKey = `${family}:${style}`;
+    
+    // Already loaded this exact font
+    if (loadedFonts.has(fontKey)) {
+        return { family, style };
+    }
+    
+    // Try loading the requested font
+    try {
+        await figma.loadFontAsync({ family, style });
+        loadedFonts.add(fontKey);
+        return { family, style };
+    } catch {
+        // Try common style variations
+        const styleVariations = ['Regular', 'Medium', 'Normal', 'Book'];
+        if (parseInt(String(weight)) >= 600) {
+            styleVariations.unshift('Bold', 'SemiBold', 'DemiBold');
+        }
+        
+        for (const altStyle of styleVariations) {
+            const altKey = `${family}:${altStyle}`;
+            if (loadedFonts.has(altKey)) {
+                return { family, style: altStyle };
+            }
+            try {
+                await figma.loadFontAsync({ family, style: altStyle });
+                loadedFonts.add(altKey);
+                return { family, style: altStyle };
+            } catch {
+                // Continue to next variation
+            }
+        }
+    }
+    
+    // Fall back to Inter
+    const fallback = parseInt(String(weight)) >= 600 ? FALLBACK_FONT_BOLD : FALLBACK_FONT;
+    const fallbackKey = `${fallback.family}:${fallback.style}`;
+    if (!loadedFonts.has(fallbackKey)) {
+        await figma.loadFontAsync(fallback);
+        loadedFonts.add(fallbackKey);
+    }
+    return fallback;
+}
+
+/**
+ * Extract all unique fonts from the visual tree for pre-loading
+ */
+function extractFonts(node: any, fonts: Set<string>): void {
+    if (!node) return;
+    
+    const styles = node.styles || node;
+    if (styles.fontFamily) {
+        const family = parseFontFamily(styles.fontFamily);
+        const weight = styles.fontWeight || '400';
+        fonts.add(`${family}:${weight}`);
+    }
+    
+    if (node.children) {
+        for (const child of node.children) {
+            extractFonts(child, fonts);
+        }
+    }
+}
+
+async function loadFonts(rootData?: any) {
+    // Always load fallback fonts
+    await figma.loadFontAsync(FALLBACK_FONT);
+    await figma.loadFontAsync(FALLBACK_FONT_BOLD);
+    loadedFonts.add(`${FALLBACK_FONT.family}:${FALLBACK_FONT.style}`);
+    loadedFonts.add(`${FALLBACK_FONT_BOLD.family}:${FALLBACK_FONT_BOLD.style}`);
+    
+    // Pre-load fonts from the data if available
+    if (rootData) {
+        const fonts = new Set<string>();
+        extractFonts(rootData, fonts);
+        
+        // Attempt to load each unique font
+        for (const fontKey of fonts) {
+            const [family, weight] = fontKey.split(':');
+            await tryLoadFont(family, weight).catch(() => {});
+        }
+    }
 }
 
 // --- HELPER: Parse Box Shadow ---
@@ -222,7 +350,12 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
         const text = figma.createText();
         node = text;
-        await figma.loadFontAsync({ family: "Inter", style: "Regular" }); // Fallback
+        
+        // Load the appropriate font (with fallback)
+        const fontFamily = parseFontFamily(s.fontFamily);
+        const fontWeight = s.fontWeight || '400';
+        const loadedFont = await tryLoadFont(fontFamily, fontWeight);
+        text.fontName = loadedFont;
 
         // Character Content
         text.characters = data.content || "";

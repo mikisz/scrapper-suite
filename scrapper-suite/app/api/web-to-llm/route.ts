@@ -1,17 +1,14 @@
 import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { browserPool } from '../../lib/browser-pool';
 import fs from 'fs-extra';
 import path from 'path';
 import archiver from 'archiver';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
-import https from 'https';
 import { URL } from 'url';
-
-puppeteer.use(StealthPlugin());
+import { validateScrapingUrl } from '@/app/lib/validation';
 
 async function downloadImage(url: string, filepath: string) {
     try {
@@ -69,16 +66,16 @@ export async function POST(request: Request) {
         // format: 'markdown' | 'html'
         // cleanup: 'article' | 'full'
 
-        if (!url) return NextResponse.json({ error: 'URL is required' }, { status: 400 });
+        // Validate URL format and security
+        const validation = validateScrapingUrl(url);
+        if (!validation.valid) {
+            return NextResponse.json({ error: validation.error }, { status: 400 });
+        }
 
         await fs.ensureDir(jobDir);
         await fs.ensureDir(imagesDir);
 
-        browser = await puppeteer.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-
+        browser = await browserPool.acquire();
         const page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
 
@@ -98,7 +95,8 @@ export async function POST(request: Request) {
         let contentHtml = await page.content();
         const docUrl = new URL(url);
 
-        await browser.close();
+        await page.close();
+        await browserPool.release(browser);
         browser = null;
 
         // Process with JSDOM
@@ -187,7 +185,7 @@ export async function POST(request: Request) {
 
     } catch (error: any) {
         console.error('LLM Scraper error:', error);
-        if (browser) await browser.close();
+        if (browser) await browserPool.release(browser);
         return NextResponse.json({ error: error.message || 'Processing failed' }, { status: 500 });
     }
 }

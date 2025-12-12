@@ -1,32 +1,30 @@
 import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-
-puppeteer.use(StealthPlugin());
+import { browserPool } from '../../lib/browser-pool';
+import { validateScrapingUrl } from '@/app/lib/validation';
+import fs from 'fs';
+import path from 'path';
 
 export async function POST(request: Request) {
+    let browser = null;
+    
     try {
         const { url } = await request.json();
 
-        if (!url) {
-            return NextResponse.json({ error: 'URL is required' }, { status: 400 });
+        // Validate URL format and security
+        const validation = validateScrapingUrl(url);
+        if (!validation.valid) {
+            return NextResponse.json({ error: validation.error }, { status: 400 });
         }
 
-        const browser = await puppeteer.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        });
-
+        browser = await browserPool.acquire();
         const page = await browser.newPage();
+        
         try {
             await page.setViewport({ width: 1440, height: 900 });
             await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
 
             // Inject the shared serializer
-            // We read the file content and inject it into the page
-            const fs = require('fs');
-            const path = require('path');
             const serializerPath = path.join(process.cwd(), 'app/lib/dom-serializer.js');
             const serializerCode = fs.readFileSync(serializerPath, 'utf8');
 
@@ -39,7 +37,8 @@ export async function POST(request: Request) {
                 return window.FigmaSerializer.serialize(document.body);
             });
 
-            await browser.close();
+            await page.close();
+            await browserPool.release(browser);
 
             return NextResponse.json({
                 message: 'Scraping successful',
@@ -47,12 +46,13 @@ export async function POST(request: Request) {
             });
 
         } catch (error) {
-            await browser.close();
+            await page.close().catch(() => {});
             throw error;
         }
 
     } catch (error: any) {
         console.error('Scraping failed:', error);
+        if (browser) await browserPool.release(browser);
         return NextResponse.json(
             { error: 'Failed to scrape website', details: error.message },
             { status: 500 }
