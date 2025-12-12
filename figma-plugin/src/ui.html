@@ -1,22 +1,51 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <style>
-    body { font-family: Inter, sans-serif; padding: 20px; }
-    input { width: 100%; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
-    button { background: #000; color: #fff; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%; }
-    button:disabled { background: #ccc; }
-    .error { color: red; margin-top: 10px; font-size: 12px; }
+    body {
+      font-family: Inter, sans-serif;
+      padding: 20px;
+    }
+
+    input {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+
+    button {
+      background: #000;
+      color: #fff;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    button:disabled {
+      background: #ccc;
+    }
+
+    .error {
+      color: red;
+      margin-top: 10px;
+      font-size: 12px;
+    }
   </style>
 </head>
+
 <body>
   <h3>Website to Figma</h3>
   <label>Scraper API URL</label>
   <input id="apiUrl" type="text" value="http://localhost:3000/api/website-to-figma" />
-  
+
   <label>Target Website URL</label>
   <input id="targetUrl" type="text" placeholder="https://example.com" />
-  
+
   <button id="importBtn">Import to Figma</button>
   <div id="status"></div>
 
@@ -27,7 +56,7 @@
     const targetUrlInput = document.getElementById('targetUrl');
 
     importBtn.onclick = async () => {
-      const apiUrl = apiUrlInput.value;
+      const apiUrl = apiUrlInput.value.replace(/\/$/, ''); // simple trim slash
       const targetUrl = targetUrlInput.value;
 
       if (!targetUrl) {
@@ -37,6 +66,7 @@
 
       importBtn.disabled = true;
       statusDiv.textContent = 'Scraping... (this may take a few seconds)';
+      statusDiv.className = '';
 
       try {
         const response = await fetch(apiUrl, {
@@ -46,20 +76,48 @@
         });
 
         if (!response.ok) {
-          throw new Error('Scraper failed: ' + response.statusText);
+          throw new Error('Scraper failed: ' + response.statusText + ' (' + response.status + ')');
         }
 
         const json = await response.json();
-        
+
         statusDiv.textContent = 'Building in Figma...';
         parent.postMessage({ pluginMessage: { type: 'build', data: json.data } }, '*');
 
       } catch (err) {
-        statusDiv.textContent = 'Error: ' + err.message;
+        statusDiv.textContent = 'Connection Error: ' + err.message + '. Is the server running?';
         statusDiv.className = 'error';
         importBtn.disabled = false;
       }
     };
+
+    // Health Check on Load
+    (async () => {
+      const statusDot = document.createElement('span');
+      statusDot.style.cssText = 'display:inline-block; width:8px; height:8px; border-radius:50%; background:#ccc; margin-right:5px;';
+      const h3 = document.querySelector('h3');
+      h3.prepend(statusDot);
+
+      const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+      // Try a simple HEAD or GET to the base URL or API to check availability
+      // Since /api/website-to-figma is POST only, we might just try to fetch it and expect 405 Method Not Allowed (which means server IS there)
+      // or a dedicated health endpoint. For now, let's assume if we get a response (even 405), it's alive.
+      try {
+        const res = await fetch(apiUrl, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } });
+        // If we get here, valid DNS/IP. 
+        // If status is 500 or 404, it might be an issue, but 400 (missing body properties) means it's running.
+        if (res.status !== 503) {
+          statusDot.style.background = '#0f0'; // Green
+          statusDot.title = "Server Connected";
+        } else {
+          statusDot.style.background = '#f00'; // Red
+          statusDot.title = "Server Unavailable (503)";
+        }
+      } catch (e) {
+        statusDot.style.background = '#f00'; // Red
+        statusDot.title = "Server Unreachable";
+      }
+    })();
 
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
@@ -70,4 +128,5 @@
     };
   </script>
 </body>
+
 </html>
