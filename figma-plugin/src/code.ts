@@ -138,6 +138,15 @@ async function buildNode(data: any): Promise<SceneNode | null> {
         node.fills = fills.length > 0 ? fills : []; // Transparent if empty
 
 
+        // Clipping
+        // Default to false (visible) unless explicitly hidden, which fixes "black frame" issues
+        // where container is smaller than content.
+        if (s.overflowX === 'hidden' || s.overflowY === 'hidden') {
+            node.clipsContent = true;
+        } else {
+            node.clipsContent = false;
+        }
+
         // Radius
         if (s.borderRadius) {
             node.topLeftRadius = s.borderRadius.topLeft || 0;

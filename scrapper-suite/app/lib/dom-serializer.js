@@ -111,6 +111,8 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 lineHeight: computed.lineHeight,
                 textAlign: computed.textAlign,
                 opacity: parseFloat(computed.opacity) || 1, // New
+                overflowX: computed.overflowX, // New
+                overflowY: computed.overflowY, // New
             };
 
             // Handling Images

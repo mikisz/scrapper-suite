@@ -107,6 +107,11 @@ var __async = (__this, __arguments, generator) => {
           }
         }
         node.fills = fills.length > 0 ? fills : [];
+        if (s.overflowX === "hidden" || s.overflowY === "hidden") {
+          node.clipsContent = true;
+        } else {
+          node.clipsContent = false;
+        }
         if (s.borderRadius) {
           node.topLeftRadius = s.borderRadius.topLeft || 0;
           node.topRightRadius = s.borderRadius.topRight || 0;

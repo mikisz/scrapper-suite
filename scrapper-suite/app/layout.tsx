@@ -16,7 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} font-sans`}>
+      <body className={`${inter.variable} font-sans bg-[#0d0c22] text-white`}>
         <div className="background-blobs">
           <div className="blob blob-1"></div>
           <div className="blob blob-2"></div>
