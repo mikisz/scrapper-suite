@@ -1,0 +1,27 @@
+{
+  "setup-worktree": [
+    "echo '🔧 Setting up worktree...'",
+    "cd scrapper-suite && npm install",
+    "cd clients/figma-plugin && npm install",
+    "echo '✅ Dependencies installed'"
+  ],
+  "validate-worktree": [
+    "cd scrapper-suite && npm run lint || true",
+    "echo '✅ Validation complete'"
+  ],
+  "worktree-conventions": {
+    "naming": {
+      "model-prefix": ["opus", "sonnet", "gpt4", "gemini", "o1", "haiku"],
+      "task-types": ["feat", "fix", "refactor", "test", "docs", "review"],
+      "examples": [
+        "opus-main       → Primary development",
+        "sonnet-tests    → Test coverage",
+        "gpt4-review     → Code review",
+        "feat-auth       → Feature work",
+        "fix-perf        → Bug fixes"
+      ]
+    },
+    "branch-format": "dev/{model}-{task}",
+    "commit-prefix": "[{model}] message"
+  }
+}
