@@ -68,7 +68,9 @@ export async function GET(request: NextRequest) {
             urlLower.includes('format=webp') ||
             urlLower.includes('format=avif') ||
             urlLower.endsWith('.webp') ||
-            urlLower.endsWith('.avif');
+            urlLower.endsWith('.avif') ||
+            urlLower.endsWith('.heic') ||
+            urlLower.endsWith('.heif');
 
         if (needsConversion) {
             try {

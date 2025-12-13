@@ -549,17 +549,19 @@ var __async = (__this, __arguments, generator) => {
   }
   function parseLineHeight(value, fontSize) {
     if (!value || value === "normal") return null;
-    const unitless = parseFloat(value);
-    if (!isNaN(unitless) && !value.includes("px") && !value.includes("em") && !value.includes("%")) {
-      return unitless * fontSize;
+    if (/^[\d.]+$/.test(value)) {
+      const unitless = parseFloat(value);
+      if (!isNaN(unitless)) {
+        return unitless * fontSize;
+      }
     }
-    if (value.includes("px")) {
+    if (value.endsWith("px")) {
       return parseFloat(value) || null;
     }
-    if (value.includes("em")) {
+    if (value.endsWith("em")) {
       return (parseFloat(value) || 1) * fontSize;
     }
-    if (value.includes("%")) {
+    if (value.endsWith("%")) {
       return parseFloat(value) / 100 * fontSize;
     }
     return null;

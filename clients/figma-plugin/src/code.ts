@@ -735,23 +735,29 @@ function getTextAlignHorizontal(align: string): 'LEFT' | 'CENTER' | 'RIGHT' | 'J
 // --- HELPER: Parse Line Height ---
 function parseLineHeight(value: string | undefined, fontSize: number): number | null {
     if (!value || value === 'normal') return null; // Let Figma use default
-    // Check for unitless multiplier (e.g., "1.5")
-    const unitless = parseFloat(value);
-    if (!isNaN(unitless) && !value.includes('px') && !value.includes('em') && !value.includes('%')) {
-        return unitless * fontSize;
+
+    // Check for unitless multiplier (e.g., "1.5") - must be purely numeric
+    if (/^[\d.]+$/.test(value)) {
+        const unitless = parseFloat(value);
+        if (!isNaN(unitless)) {
+            return unitless * fontSize;
+        }
     }
+
     // Check for px value
-    if (value.includes('px')) {
+    if (value.endsWith('px')) {
         return parseFloat(value) || null;
     }
     // Check for em value
-    if (value.includes('em')) {
+    if (value.endsWith('em')) {
         return (parseFloat(value) || 1) * fontSize;
     }
     // Check for percentage
-    if (value.includes('%')) {
+    if (value.endsWith('%')) {
         return (parseFloat(value) / 100) * fontSize;
     }
+
+    // Ignore other units like pt, rem, etc.
     return null;
 }
 
