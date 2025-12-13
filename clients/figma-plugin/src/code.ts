@@ -8,6 +8,9 @@ let processedNodes = 0;
 let warnings: string[] = [];
 let errors: string[] = [];
 
+// Import lock to prevent concurrent builds
+let isImporting = false;
+
 function sendProgress(stage: string, percent: number | null = null, detail: string = '', status: string = '') {
     figma.ui.postMessage({ type: 'progress', stage, percent, detail, status });
 }
@@ -41,6 +44,12 @@ function getErrorSuggestion(error: string): string {
         return 'Some elements have invalid sizes and were skipped.';
     }
     return 'Try using the Chrome Extension for protected pages.';
+}
+
+// Helper to strip alpha from color objects (Figma doesn't accept 'a' in color)
+function toRGB(color: any): RGB | null {
+    if (!color) return null;
+    return { r: color.r, g: color.g, b: color.b };
 }
 
 function countNodes(data: any): number {
@@ -89,14 +98,15 @@ const imageCache: Map<string, Uint8Array | null> = new Map();
 // Extract all image URLs from the visual tree
 function extractImageUrls(node: any, urls: Set<string>): void {
     if (!node) return;
-    
+
     // Direct image nodes
     if (node.type === 'IMAGE' && node.src) {
         urls.add(node.src);
     }
-    
+
     // Background images (from styles or pseudo-elements)
-    const styles = node.styles || {};
+    // Handle both nested styles (FRAME) and flattened styles (TEXT_NODE)
+    const styles = node.styles || node;
     if (styles.backgroundImage && styles.backgroundImage.type === 'IMAGE' && styles.backgroundImage.url) {
         urls.add(styles.backgroundImage.url);
     }
@@ -151,48 +161,56 @@ figma.ui.onmessage = async (msg) => {
 
     // Original Logic
     if (msg.type === 'build') {
-        const rootData = msg.data;
-        
-        // Reset state
-        warnings = [];
-        errors = [];
-        
-        // Validate input data
-        if (!rootData) {
-            sendError('No data to import', 'The data object is empty or undefined.');
+        // Prevent concurrent imports
+        if (isImporting) {
+            sendError('Import in progress', 'Please wait for the current import to complete.');
             return;
         }
-        
-        if (!rootData.type) {
-            sendError('Invalid data format', 'Expected a visual tree with a "type" field. Make sure you\'re using the Chrome Extension output.');
-            return;
-        }
-        
-        // Count total nodes for progress tracking
-        totalNodes = countNodes(rootData);
-        processedNodes = 0;
-        
-        if (totalNodes === 0) {
-            sendError('Empty page', 'The scraped page has no visible content. Try a different page.');
-            return;
-        }
-        
-        // Clear cache from previous imports
-        imageCache.clear();
-        
+
+        isImporting = true;
+
         try {
+            const rootData = msg.data;
+
+            // Reset state
+            warnings = [];
+            errors = [];
+
+            // Validate input data
+            if (!rootData) {
+                sendError('No data to import', 'The data object is empty or undefined.');
+                return;
+            }
+
+            if (!rootData.type) {
+                sendError('Invalid data format', 'Expected a visual tree with a "type" field. Make sure you\'re using the Chrome Extension output.');
+                return;
+            }
+
+            // Count total nodes for progress tracking
+            totalNodes = countNodes(rootData);
+            processedNodes = 0;
+
+            if (totalNodes === 0) {
+                sendError('Empty page', 'The scraped page has no visible content. Try a different page.');
+                return;
+            }
+
+            // Clear cache from previous imports
+            imageCache.clear();
+
             // Step 1: Load fonts
             sendProgress('Loading fonts', 10, '', 'Preparing fonts...');
             await loadFonts(rootData);
             sendProgress('Loading fonts', 25, '', 'Fonts ready');
-            
+
             // Step 2: Preload all images in parallel
             const urls = new Set<string>();
             extractImageUrls(rootData, urls);
             if (urls.size > 0) {
                 sendProgress('Loading images', 30, `0/${urls.size} images`, 'Downloading images in parallel...');
                 await preloadImages(rootData);
-                
+
                 // Check how many images loaded successfully
                 const loadedCount = Array.from(imageCache.values()).filter(v => v !== null).length;
                 if (loadedCount < urls.size) {
@@ -200,17 +218,17 @@ figma.ui.onmessage = async (msg) => {
                 }
                 sendProgress('Loading images', 50, `${loadedCount}/${urls.size} loaded`, 'Images ready');
             }
-            
+
             // Step 3: Build the node tree (images are now cached)
             sendProgress('Building layout', 55, `0/${totalNodes} nodes`, 'Creating Figma layers...');
             const rootNode = await buildNode(rootData, figma.currentPage, undefined);
-            
+
             // Success! Select the imported content
             if (rootNode) {
                 figma.currentPage.selection = [rootNode];
                 figma.viewport.scrollAndZoomIntoView([rootNode]);
             }
-            
+
             // Send completion with summary
             const summary: any = {
                 type: 'done',
@@ -220,19 +238,22 @@ figma.ui.onmessage = async (msg) => {
                     totalImages: imageCache.size,
                 },
             };
-            
+
             if (warnings.length > 0) {
                 summary.warnings = warnings;
             }
-            
+
             figma.ui.postMessage(summary);
-            
+
         } catch (error: any) {
             console.error('Build error:', error);
+            console.error('Error stack:', error.stack);
             sendError(
                 'Failed to build layout',
-                error.message || 'An unexpected error occurred during import.'
+                error.message || error.toString() || 'An unexpected error occurred during import.'
             );
+        } finally {
+            isImporting = false;
         }
     }
 };
@@ -402,18 +423,26 @@ function getCategoryFallback(originalFont: string, weight: string | number): Fon
 /**
  * Map CSS font-weight to Figma style name
  */
-function getFontStyle(weight: string | number): string {
+function getFontStyle(weight: string | number, isItalic: boolean = false): string {
     const w = typeof weight === 'string' ? parseInt(weight) || 400 : weight;
-    
-    if (w <= 100) return 'Thin';
-    if (w <= 200) return 'ExtraLight';
-    if (w <= 300) return 'Light';
-    if (w <= 400) return 'Regular';
-    if (w <= 500) return 'Medium';
-    if (w <= 600) return 'SemiBold';
-    if (w <= 700) return 'Bold';
-    if (w <= 800) return 'ExtraBold';
-    return 'Black';
+
+    let style: string;
+    if (w <= 100) style = 'Thin';
+    else if (w <= 200) style = 'ExtraLight';
+    else if (w <= 300) style = 'Light';
+    else if (w <= 400) style = 'Regular';
+    else if (w <= 500) style = 'Medium';
+    else if (w <= 600) style = 'SemiBold';
+    else if (w <= 700) style = 'Bold';
+    else if (w <= 800) style = 'ExtraBold';
+    else style = 'Black';
+
+    // Append Italic if needed (common Figma font naming convention)
+    if (isItalic) {
+        // Common patterns: "Italic", "Regular Italic", "Bold Italic"
+        return style === 'Regular' ? 'Italic' : `${style} Italic`;
+    }
+    return style;
 }
 
 /**
@@ -423,15 +452,15 @@ function getFontStyle(weight: string | number): string {
  * 3. Try mapped alternative (from FONT_MAP)
  * 4. Fall back to category-appropriate font (serif/sans-serif/mono)
  */
-async function tryLoadFont(family: string, weight: string | number, originalFamily?: string): Promise<FontName> {
-    const style = getFontStyle(weight);
+async function tryLoadFont(family: string, weight: string | number, originalFamily?: string, isItalic: boolean = false): Promise<FontName> {
+    const style = getFontStyle(weight, isItalic);
     const fontKey = `${family}:${style}`;
-    
+
     // Already loaded this exact font
     if (loadedFonts.has(fontKey)) {
         return { family, style };
     }
-    
+
     // Try loading the requested font
     try {
         await figma.loadFontAsync({ family, style });
@@ -439,11 +468,20 @@ async function tryLoadFont(family: string, weight: string | number, originalFami
         return { family, style };
     } catch {
         // Try common style variations
-        const styleVariations = ['Regular', 'Medium', 'Normal', 'Book'];
-        if (parseInt(String(weight)) >= 600) {
-            styleVariations.unshift('Bold', 'SemiBold', 'DemiBold');
+        let styleVariations: string[];
+        if (isItalic) {
+            // Italic variations
+            styleVariations = ['Italic', 'Regular Italic', 'Medium Italic', 'Oblique'];
+            if (parseInt(String(weight)) >= 600) {
+                styleVariations.unshift('Bold Italic', 'SemiBold Italic');
+            }
+        } else {
+            styleVariations = ['Regular', 'Medium', 'Normal', 'Book'];
+            if (parseInt(String(weight)) >= 600) {
+                styleVariations.unshift('Bold', 'SemiBold', 'DemiBold');
+            }
         }
-        
+
         for (const altStyle of styleVariations) {
             const altKey = `${family}:${altStyle}`;
             if (loadedFonts.has(altKey)) {
@@ -457,19 +495,28 @@ async function tryLoadFont(family: string, weight: string | number, originalFami
                 // Continue to next variation
             }
         }
+
+        // If italic not found, fall back to non-italic version
+        if (isItalic) {
+            try {
+                return await tryLoadFont(family, weight, originalFamily, false);
+            } catch {
+                // Continue to mapped alternative
+            }
+        }
     }
-    
+
     // Try mapped alternative if we haven't already
     const lowerFamily = family.toLowerCase();
     const mappedFont = FONT_MAP[lowerFamily];
     if (mappedFont && mappedFont !== family) {
         try {
-            return await tryLoadFont(mappedFont, weight, originalFamily || family);
+            return await tryLoadFont(mappedFont, weight, originalFamily || family, isItalic);
         } catch {
             // Continue to category fallback
         }
     }
-    
+
     // Fall back to category-appropriate font
     const fallback = getCategoryFallback(originalFamily || family, weight);
     const fallbackKey = `${fallback.family}:${fallback.style}`;
@@ -560,8 +607,15 @@ function parseBoxShadow(shadowStr: string): Effect[] {
     const shadows = shadowStr.split(/,(?![^()]*\))/);
 
     for (const shadow of shadows) {
-        const s = shadow.trim();
-        // Regex to extract color and lengths: 
+        let s = shadow.trim();
+
+        // Check for inset keyword (can appear at start or end)
+        const isInset = /\binset\b/i.test(s);
+        if (isInset) {
+            s = s.replace(/\binset\b/gi, '').trim();
+        }
+
+        // Regex to extract color and lengths:
         // matches: rgba?(...) | #...  AND  ...px ...px ...px ...px
         // Simplified approach: Extract color, then remove it, then parse numbers.
 
@@ -574,7 +628,7 @@ function parseBoxShadow(shadowStr: string): Effect[] {
             // We need a helper to parse RGB string to objects, but for now let's assume standard format
             // Just clearing it from string to parse dimensions
             remaining = s.replace(colorMatch[0], '').trim();
-            // TODO: Proper color parsing if strict fidelity needed. 
+            // TODO: Proper color parsing if strict fidelity needed.
             // For now, default black shadow is better than nothing, or try to enable basic parsing?
             // Let's rely on a basic extraction if possible.
             if (colorMatch[0].startsWith('rgba')) {
@@ -592,14 +646,62 @@ function parseBoxShadow(shadowStr: string): Effect[] {
 
         const parts = remaining.split(/\s+/).map(p => parseFloat(p));
         // CSS: offset-x | offset-y | blur-radius | spread-radius
-        // Figma: DropShadowEffect
+        // Figma: DropShadowEffect or InnerShadowEffect for inset
+        if (parts.length >= 2) {
+            effects.push({
+                type: isInset ? 'INNER_SHADOW' : 'DROP_SHADOW',
+                color: color,
+                offset: { x: parts[0] || 0, y: parts[1] || 0 },
+                radius: parts[2] || 0,
+                spread: parts[3] || 0,
+                visible: true,
+                blendMode: 'NORMAL'
+            });
+        }
+    }
+    return effects;
+}
+
+// --- HELPER: Parse Text Shadow (similar to box-shadow but no spread or inset) ---
+function parseTextShadow(shadowStr: string): Effect[] {
+    if (!shadowStr || shadowStr === 'none') return [];
+
+    const effects: Effect[] = [];
+    // Split by comma, ignoring commas inside parentheses (rgb/a)
+    const shadows = shadowStr.split(/,(?![^()]*\))/);
+
+    for (const shadow of shadows) {
+        const s = shadow.trim();
+
+        let color = { r: 0, g: 0, b: 0, a: 0.5 }; // default
+        let remaining = s;
+
+        // Try RGBA/RGB
+        const colorMatch = s.match(/rgba?\(.*?\)/) || s.match(/#[a-fA-F0-9]{3,6}/);
+        if (colorMatch) {
+            remaining = s.replace(colorMatch[0], '').trim();
+            if (colorMatch[0].startsWith('rgba')) {
+                const numbers = colorMatch[0].match(/[\d.]+/g)?.map(Number);
+                if (numbers && numbers.length >= 3) {
+                    color = { r: numbers[0] / 255, g: numbers[1] / 255, b: numbers[2] / 255, a: numbers[3] ?? 1 };
+                }
+            } else if (colorMatch[0].startsWith('rgb')) {
+                const numbers = colorMatch[0].match(/[\d.]+/g)?.map(Number);
+                if (numbers && numbers.length >= 3) {
+                    color = { r: numbers[0] / 255, g: numbers[1] / 255, b: numbers[2] / 255, a: 1 };
+                }
+            }
+        }
+
+        const parts = remaining.split(/\s+/).map(p => parseFloat(p));
+        // CSS text-shadow: offset-x | offset-y | blur-radius (no spread)
         if (parts.length >= 2) {
             effects.push({
                 type: 'DROP_SHADOW',
                 color: color,
                 offset: { x: parts[0] || 0, y: parts[1] || 0 },
                 radius: parts[2] || 0,
-                spread: parts[3] || 0,
+                spread: 0, // text-shadow doesn't have spread
                 visible: true,
                 blendMode: 'NORMAL'
             });
@@ -620,6 +722,108 @@ function getTextDecoration(decoration: string): TextDecoration {
     if (decoration && decoration.includes('underline')) return 'UNDERLINE';
     if (decoration && decoration.includes('line-through')) return 'STRIKETHROUGH';
     return 'NONE';
+}
+
+// --- HELPER: Text Alignment ---
+function getTextAlignHorizontal(align: string): 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED' {
+    if (align === 'center') return 'CENTER';
+    if (align === 'right' || align === 'end') return 'RIGHT';
+    if (align === 'justify') return 'JUSTIFIED';
+    return 'LEFT'; // default, includes 'left' and 'start'
+}
+
+// --- HELPER: Parse Line Height ---
+function parseLineHeight(value: string | undefined, fontSize: number): number | null {
+    if (!value || value === 'normal') return null; // Let Figma use default
+
+    // Check for unitless multiplier (e.g., "1.5") - must be purely numeric
+    if (/^[\d.]+$/.test(value)) {
+        const unitless = parseFloat(value);
+        if (!isNaN(unitless)) {
+            return unitless * fontSize;
+        }
+    }
+
+    // Check for px value
+    if (value.endsWith('px')) {
+        return parseFloat(value) || null;
+    }
+    // Check for em value
+    if (value.endsWith('em')) {
+        return (parseFloat(value) || 1) * fontSize;
+    }
+    // Check for percentage
+    if (value.endsWith('%')) {
+        return (parseFloat(value) / 100) * fontSize;
+    }
+
+    // Ignore other units like pt, rem, etc.
+    return null;
+}
+
+// --- HELPER: Apply CSS Transform ---
+function applyTransform(node: SceneNode, transform: string | null | undefined): void {
+    if (!transform || transform === 'none') return;
+
+    // Check if node supports rotation (most layout nodes do)
+    const supportsRotation = 'rotation' in node;
+
+    // Parse matrix(a, b, c, d, tx, ty) - the computed form of most transforms
+    const matrixMatch = transform.match(/matrix\(\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/);
+    if (matrixMatch) {
+        const [, a, b, c, d, tx, ty] = matrixMatch.map((v, i) => i === 0 ? v : parseFloat(v));
+        const aNum = a as number, bNum = b as number;
+
+        // Calculate rotation from matrix: atan2(b, a) gives angle in radians
+        const rotationRad = Math.atan2(bNum, aNum);
+        const rotationDeg = rotationRad * (180 / Math.PI);
+
+        // Apply rotation (Figma uses counterclockwise positive)
+        if (supportsRotation && Math.abs(rotationDeg) > 0.1) {
+            (node as FrameNode).rotation = -rotationDeg;
+        }
+
+        // Apply translation
+        const txNum = tx as number, tyNum = ty as number;
+        if (Math.abs(txNum) > 0.1 || Math.abs(tyNum) > 0.1) {
+            node.x += txNum;
+            node.y += tyNum;
+        }
+
+        // Note: scale is embedded in the matrix but Figma doesn't support non-uniform scale
+        // Skew is also not directly supported in Figma
+        return;
+    }
+
+    // Handle individual transform functions as fallback
+    // rotate(Xdeg) or rotate(Xrad)
+    const rotateMatch = transform.match(/rotate\(\s*(-?[\d.]+)(deg|rad|turn)?\s*\)/);
+    if (rotateMatch && supportsRotation) {
+        let degrees = parseFloat(rotateMatch[1]);
+        const unit = rotateMatch[2] || 'deg';
+        if (unit === 'rad') degrees = degrees * (180 / Math.PI);
+        else if (unit === 'turn') degrees = degrees * 360;
+        (node as FrameNode).rotation = -degrees; // Figma uses counterclockwise
+    }
+
+    // translate(X, Y) or translateX/Y
+    const translateMatch = transform.match(/translate\(\s*(-?[\d.]+)(?:px)?\s*(?:,\s*(-?[\d.]+)(?:px)?)?\s*\)/);
+    if (translateMatch) {
+        const tx = parseFloat(translateMatch[1]) || 0;
+        const ty = parseFloat(translateMatch[2]) || 0;
+        node.x += tx;
+        node.y += ty;
+    }
+
+    const translateXMatch = transform.match(/translateX\(\s*(-?[\d.]+)(?:px)?\s*\)/);
+    if (translateXMatch) {
+        node.x += parseFloat(translateXMatch[1]) || 0;
+    }
+
+    const translateYMatch = transform.match(/translateY\(\s*(-?[\d.]+)(?:px)?\s*\)/);
+    if (translateYMatch) {
+        node.y += parseFloat(translateYMatch[1]) || 0;
+    }
 }
 
 // --- HELPER: Parse Gradient Angle ---
@@ -691,7 +895,8 @@ function parseColorString(colorStr: string): RGBA | null {
 }
 
 // --- HELPER: Extract gradient color stops ---
-function extractGradientStops(gradientStr: string): ColorStop[] {
+// Returns stops and average opacity (Figma doesn't support per-stop opacity)
+function extractGradientStops(gradientStr: string): { stops: ColorStop[]; opacity: number } {
     const colorStopRegex = /(rgba?\([^)]+\)|#[a-fA-F0-9]{3,8})(?:\s+(\d+(?:\.\d+)?%?))?/g;
     let match;
     const rawStops: { color: RGBA; position?: number }[] = [];
@@ -700,7 +905,7 @@ function extractGradientStops(gradientStr: string): ColorStop[] {
         if (!color) continue;
         rawStops.push({ color, position: match[2] ? parseFloat(match[2])/100 : undefined });
     }
-    if (rawStops.length < 2) return [];
+    if (rawStops.length < 2) return { stops: [], opacity: 1 };
     for (let i = 0; i < rawStops.length; i++) {
         if (rawStops[i].position === undefined) {
             if (i === 0) rawStops[i].position = 0;
@@ -715,7 +920,17 @@ function extractGradientStops(gradientStr: string): ColorStop[] {
             }
         }
     }
-    return rawStops.map(s => ({ position: s.position || 0, color: s.color }));
+
+    // Calculate average opacity from all stops (Figma doesn't support per-stop alpha)
+    const avgOpacity = rawStops.reduce((sum, s) => sum + (s.color.a ?? 1), 0) / rawStops.length;
+
+    // Figma ColorStop expects color as {r,g,b,a}
+    const stops: ColorStop[] = rawStops.map(s => ({
+        position: s.position || 0,
+        color: { r: s.color.r, g: s.color.g, b: s.color.b, a: s.color.a ?? 1 }
+    }));
+
+    return { stops, opacity: avgOpacity };
 }
 
 // --- HELPER: Parse Radial Gradient Position ---
@@ -822,10 +1037,10 @@ function parseRadialGradient(gradientStr: string): GradientPaint | null {
         [0, scaleY, y - scaleY / 2]
     ];
     
-    const stops = extractGradientStops(gradientStr);
+    const { stops, opacity } = extractGradientStops(gradientStr);
     if (stops.length < 2) return null;
-    
-    return { type: 'GRADIENT_RADIAL', gradientStops: stops, gradientTransform: transform };
+
+    return { type: 'GRADIENT_RADIAL', gradientStops: stops, gradientTransform: transform, opacity };
 }
 
 // --- HELPER: Parse Linear Gradient ---
@@ -833,9 +1048,9 @@ function parseLinearGradient(gradientStr: string): GradientPaint | null {
     if (!gradientStr?.includes('linear-gradient')) return null;
     const angle = parseGradientAngle(gradientStr);
     const transform = angleToGradientTransform(angle);
-    const stops = extractGradientStops(gradientStr);
+    const { stops, opacity } = extractGradientStops(gradientStr);
     if (stops.length < 2) return null;
-    return { type: 'GRADIENT_LINEAR', gradientStops: stops, gradientTransform: transform };
+    return { type: 'GRADIENT_LINEAR', gradientStops: stops, gradientTransform: transform, opacity };
 }
 
 // --- HELPER: Parse Any Gradient ---
@@ -1044,8 +1259,9 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
         sendProgress('Building layout', percent, `${processedNodes}/${totalNodes} nodes`);
     }
 
-    let node: SceneNode;
-    const s = data.styles || {};
+    let node!: SceneNode; // Definite assignment assertion - all non-returning branches assign node
+    // Handle both nested styles (FRAME) and flattened styles (TEXT_NODE from serializer)
+    const s = data.styles || data;
 
     // --- 1. CREATE NODE BASED ON TYPE ---
     if (data.type === 'VECTOR') {
@@ -1114,14 +1330,18 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             if (data.svgFill && svgNode.children && svgNode.children.length <= 5) {
                 // Only apply to simple SVGs to avoid messing up complex illustrations
                 try {
-                    for (const child of svgNode.findAll()) {
-                        if ('fills' in child && (child as GeometryMixin).fills) {
-                            const fills = (child as GeometryMixin).fills as readonly Paint[];
-                            if (fills.length > 0 && fills[0].type === 'SOLID') {
-                                (child as GeometryMixin).fills = [{
-                                    type: 'SOLID',
-                                    color: data.svgFill
-                                }];
+                    const fillRgb = toRGB(data.svgFill);
+                    if (fillRgb) {
+                        for (const child of svgNode.findAll()) {
+                            if ('fills' in child && (child as GeometryMixin).fills) {
+                                const fills = (child as GeometryMixin).fills as readonly Paint[];
+                                if (fills.length > 0 && fills[0].type === 'SOLID') {
+                                    (child as GeometryMixin).fills = [{
+                                        type: 'SOLID',
+                                        color: fillRgb,
+                                        opacity: data.svgFill.a ?? 1
+                                    }];
+                                }
                             }
                         }
                     }
@@ -1173,12 +1393,39 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
         node = rect;
 
         // Use cached image (already downloaded in parallel)
+        let imageLoaded = false;
         if (data.src) {
             const imageBytes = imageCache.get(data.src);
             if (imageBytes) {
-                const imageHash = figma.createImage(imageBytes).hash;
-                rect.fills = [{ type: 'IMAGE', scaleMode: 'FILL', imageHash }];
+                try {
+                    const imageHash = figma.createImage(imageBytes).hash;
+                    // Map CSS object-fit to Figma scaleMode
+                    // CSS cover = scale to fill & crop -> Figma FILL
+                    // CSS contain = scale to fit inside -> Figma FIT
+                    // CSS fill = stretch to fill (ignore aspect ratio) -> Figma FILL (closest, no stretch mode)
+                    // CSS none = no scaling, original size -> Figma CROP
+                    let scaleMode: 'FILL' | 'FIT' | 'CROP' | 'TILE' = 'FILL';
+                    if (data.objectFit === 'contain') {
+                        scaleMode = 'FIT';
+                    } else if (data.objectFit === 'none' || data.objectFit === 'scale-down') {
+                        scaleMode = 'CROP';
+                    }
+                    // 'cover', 'fill' and default -> FILL (scale to fill, crop if needed)
+                    rect.fills = [{ type: 'IMAGE', scaleMode, imageHash }];
+                    imageLoaded = true;
+                } catch (e) {
+                    // Image format not supported (WebP, AVIF, etc.) - use placeholder color
+                    console.warn('Image format unsupported:', data.src?.substring(0, 80), e);
+                }
+            } else {
+                // Image was in the tree but not in cache (download failed or wasn't extracted)
+                console.warn('Image not in cache:', data.src?.substring(0, 80));
             }
+        }
+
+        // Set placeholder if image didn't load
+        if (!imageLoaded) {
+            rect.fills = [{ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } }];
         }
 
         // Apply Shadows to Image too if present
@@ -1196,32 +1443,49 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             const text = figma.createText();
             node = text;
             text.name = `::${pseudoName.toLowerCase()}`;
-            
-            // Load font with fallback
-            const fontFamily = parseFontFamily(s.fontFamily);
-            const fontWeight = s.fontWeight || '400';
-            const loadedFont = await tryLoadFont(fontFamily, fontWeight);
-            text.fontName = loadedFont;
-            
-            text.characters = data.content;
-            
-            if (s.fontSize) text.fontSize = s.fontSize;
-            if (s.color) {
-                text.fills = [{ type: 'SOLID', color: s.color }];
-            }
-            
-            // Apply letter spacing
-            if (s.letterSpacing) {
-                text.letterSpacing = { value: s.letterSpacing, unit: 'PIXELS' };
-            }
-            
-            // Apply text transform
-            if (s.textTransform) {
-                text.textCase = getTextCase(s.textTransform);
-            }
-            
-            if (s.boxShadow) {
-                text.effects = parseBoxShadow(s.boxShadow);
+
+            try {
+                // Load font with fallback
+                const fontFamily = parseFontFamily(s.fontFamily);
+                const fontWeight = s.fontWeight || '400';
+                const isItalic = s.fontStyle === 'italic' || s.fontStyle === 'oblique';
+                const loadedFont = await tryLoadFont(fontFamily, fontWeight, undefined, isItalic);
+                text.fontName = loadedFont;
+
+                text.characters = data.content;
+
+                if (s.fontSize) text.fontSize = s.fontSize;
+                if (s.color) {
+                    const rgb = toRGB(s.color);
+                    if (rgb) text.fills = [{ type: 'SOLID', color: rgb, opacity: s.color.a ?? 1 }];
+                }
+
+                // Apply letter spacing
+                if (s.letterSpacing) {
+                    text.letterSpacing = { value: s.letterSpacing, unit: 'PIXELS' };
+                }
+
+                // Apply text transform
+                if (s.textTransform) {
+                    text.textCase = getTextCase(s.textTransform);
+                }
+
+                // Text shadow (with box-shadow fallback)
+                if (s.textShadow) {
+                    text.effects = parseTextShadow(s.textShadow);
+                } else if (s.boxShadow) {
+                    text.effects = parseBoxShadow(s.boxShadow);
+                }
+            } catch (e) {
+                console.warn('Pseudo-element text creation failed:', e);
+                // Load fallback font before setting characters
+                try {
+                    await figma.loadFontAsync(FALLBACK_FONT);
+                    text.fontName = FALLBACK_FONT;
+                    text.characters = data.content?.replace(/[^\x00-\x7F]/g, '?') || '?';
+                } catch (fallbackErr) {
+                    console.warn('Fallback font load also failed:', fallbackErr);
+                }
             }
         } else {
             // Decorative, gradient, or image pseudo-element - create a frame
@@ -1232,23 +1496,46 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             // Apply background
             const fills: Paint[] = [];
             if (s.backgroundColor) {
-                fills.push({ type: 'SOLID', color: s.backgroundColor, opacity: s.opacity });
+                // Use alpha from backgroundColor if available, otherwise fall back to opacity
+                const bgAlpha = s.backgroundColor.a !== undefined ? s.backgroundColor.a : 1;
+                const finalOpacity = bgAlpha * (s.opacity ?? 1);
+                fills.push({ type: 'SOLID', color: { r: s.backgroundColor.r, g: s.backgroundColor.g, b: s.backgroundColor.b }, opacity: finalOpacity });
             }
             
             // Handle content: url() images
             if (data.imageUrl) {
                 const imgBytes = imageCache.get(data.imageUrl);
                 if (imgBytes) {
-                    const imgHash = figma.createImage(imgBytes).hash;
-                    fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: imgHash });
+                    try {
+                        const imgHash = figma.createImage(imgBytes).hash;
+                        fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: imgHash });
+                    } catch (e) {
+                        console.warn('Pseudo-element image format unsupported:', data.imageUrl?.substring(0, 80));
+                        fills.push({ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } });
+                    }
                 }
             }
             // Handle background-image
             else if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
                 const bgBytes = imageCache.get(s.backgroundImage.url);
                 if (bgBytes) {
-                    const bgHash = figma.createImage(bgBytes).hash;
-                    fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: bgHash });
+                    try {
+                        const bgHash = figma.createImage(bgBytes).hash;
+                        // Map CSS background-size and background-repeat to Figma scaleMode
+                        let scaleMode: 'FILL' | 'FIT' | 'CROP' | 'TILE' = 'FILL';
+                        const bgSize = s.backgroundImage.size || '';
+                        const bgRepeat = s.backgroundRepeat || 'no-repeat';
+
+                        if (bgRepeat === 'repeat' || bgRepeat === 'repeat-x' || bgRepeat === 'repeat-y') {
+                            scaleMode = 'TILE';
+                        } else if (bgSize === 'contain') {
+                            scaleMode = 'FIT';
+                        }
+                        fills.push({ type: 'IMAGE', scaleMode, imageHash: bgHash });
+                    } catch (e) {
+                        console.warn('Pseudo-element bg image format unsupported:', s.backgroundImage.url?.substring(0, 80));
+                        fills.push({ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } });
+                    }
                 }
             } else if (s.backgroundImage && s.backgroundImage.type === 'GRADIENT') {
                 const gradient = parseGradient(s.backgroundImage.raw);
@@ -1271,9 +1558,12 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             
             // Apply borders
             if (s.border && s.border.width > 0 && s.border.color) {
-                frame.strokes = [{ type: 'SOLID', color: s.border.color }];
-                frame.strokeWeight = s.border.width;
-                frame.strokeAlign = 'INSIDE';
+                const borderRgb = toRGB(s.border.color);
+                if (borderRgb) {
+                    frame.strokes = [{ type: 'SOLID', color: borderRgb, opacity: s.border.color.a ?? 1 }];
+                    frame.strokeWeight = s.border.width;
+                    frame.strokeAlign = 'INSIDE';
+                }
             }
             
             // Set reasonable default size for pseudo-elements
@@ -1288,37 +1578,66 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
         const text = figma.createText();
         node = text;
-        
-        // Load the appropriate font (with fallback)
-        const fontFamily = parseFontFamily(s.fontFamily);
-        const fontWeight = s.fontWeight || '400';
-        const loadedFont = await tryLoadFont(fontFamily, fontWeight);
-        text.fontName = loadedFont;
 
-        // Character Content
-        text.characters = data.content || "";
+        try {
+            // Load the appropriate font (with fallback)
+            const fontFamily = parseFontFamily(s.fontFamily);
+            const fontWeight = s.fontWeight || '400';
+            const isItalic = s.fontStyle === 'italic' || s.fontStyle === 'oblique';
+            const loadedFont = await tryLoadFont(fontFamily, fontWeight, undefined, isItalic);
+            text.fontName = loadedFont;
 
-        // Basic Color/Size
-        if (s.fontSize) text.fontSize = s.fontSize;
-        if (s.color) {
-            text.fills = [{ type: 'SOLID', color: s.color }];
-        }
+            // Character Content - handle potential issues with special characters
+            const content = data.content || "";
+            text.characters = content;
 
-        // Advanced Typography
-        if (s.letterSpacing) {
-            text.letterSpacing = { value: s.letterSpacing, unit: 'PIXELS' };
-        }
-        if (s.textTransform) {
-            text.textCase = getTextCase(s.textTransform);
-        }
-        if (s.textDecoration) {
-            text.textDecoration = getTextDecoration(s.textDecoration);
-        }
+            // Basic Color/Size
+            if (s.fontSize) text.fontSize = s.fontSize;
+            if (s.color) {
+                const rgb = toRGB(s.color);
+                if (rgb) text.fills = [{ type: 'SOLID', color: rgb, opacity: s.color.a ?? 1 }];
+            }
 
-        // Shadows on text? CSS supports text-shadow (not box-shadow usually), 
-        // but sometimes we get box-shadow on span. Let's try.
-        if (s.boxShadow) {
-            node.effects = parseBoxShadow(s.boxShadow);
+            // Advanced Typography
+            if (s.letterSpacing) {
+                text.letterSpacing = { value: s.letterSpacing, unit: 'PIXELS' };
+            }
+            if (s.textTransform) {
+                text.textCase = getTextCase(s.textTransform);
+            }
+            if (s.textDecoration) {
+                text.textDecoration = getTextDecoration(s.textDecoration);
+            }
+
+            // Text Alignment
+            if (s.textAlign) {
+                text.textAlignHorizontal = getTextAlignHorizontal(s.textAlign);
+            }
+
+            // Line Height
+            if (s.lineHeight && s.fontSize) {
+                const lineHeightPx = parseLineHeight(s.lineHeight, s.fontSize);
+                if (lineHeightPx) {
+                    text.lineHeight = { value: lineHeightPx, unit: 'PIXELS' };
+                }
+            }
+
+            // Shadows on text (text-shadow takes priority, fall back to box-shadow)
+            if (s.textShadow) {
+                text.effects = parseTextShadow(s.textShadow);
+            } else if (s.boxShadow) {
+                text.effects = parseBoxShadow(s.boxShadow);
+            }
+        } catch (e) {
+            // If text creation fails, load fallback font before setting characters
+            console.warn('Text node creation failed:', e, 'Content:', data.content?.substring(0, 50));
+            try {
+                await figma.loadFontAsync(FALLBACK_FONT);
+                text.fontName = FALLBACK_FONT;
+                text.characters = data.content?.replace(/[^\x00-\x7F]/g, '?') || "?";
+            } catch (fallbackErr) {
+                console.warn('Fallback font load also failed:', fallbackErr);
+            }
         }
     }
     else if (data.type === 'FRAME') {
@@ -1329,14 +1648,35 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
         // Backgrounds
         const fills: Paint[] = [];
         if (s.backgroundColor) {
-            fills.push({ type: 'SOLID', color: s.backgroundColor, opacity: s.opacity });
+            // Use alpha from backgroundColor if available, otherwise fall back to opacity
+            const bgAlpha = s.backgroundColor.a !== undefined ? s.backgroundColor.a : 1;
+            const finalOpacity = bgAlpha * (s.opacity ?? 1);
+            fills.push({ type: 'SOLID', color: { r: s.backgroundColor.r, g: s.backgroundColor.g, b: s.backgroundColor.b }, opacity: finalOpacity });
         }
         if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
             // Use cached image (already downloaded in parallel)
             const bgBytes = imageCache.get(s.backgroundImage.url);
             if (bgBytes) {
-                const bgHash = figma.createImage(bgBytes).hash;
-                fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: bgHash });
+                try {
+                    const bgHash = figma.createImage(bgBytes).hash;
+                    // Map CSS background-size and background-repeat to Figma scaleMode
+                    let scaleMode: 'FILL' | 'FIT' | 'CROP' | 'TILE' = 'FILL';
+                    const bgSize = s.backgroundImage.size || '';
+                    const bgRepeat = s.backgroundRepeat || 'no-repeat';
+
+                    // Check for repeat first (takes priority)
+                    if (bgRepeat === 'repeat' || bgRepeat === 'repeat-x' || bgRepeat === 'repeat-y') {
+                        scaleMode = 'TILE';
+                    } else if (bgSize === 'contain') {
+                        // CSS contain = scale to fit inside -> Figma FIT
+                        scaleMode = 'FIT';
+                    }
+                    // 'cover', 'auto', '100% 100%', and default -> FILL (scale to fill)
+                    fills.push({ type: 'IMAGE', scaleMode, imageHash: bgHash });
+                } catch (e) {
+                    console.warn('Frame bg image format unsupported:', s.backgroundImage.url?.substring(0, 80));
+                    fills.push({ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } });
+                }
             }
         } else if (s.backgroundImage && s.backgroundImage.type === 'GRADIENT') {
             const gradient = parseGradient(s.backgroundImage.raw);
@@ -1350,10 +1690,13 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
 
         // Borders -> Strokes
         if (s.border && s.border.width > 0 && s.border.color) {
-            frame.strokes = [{ type: 'SOLID', color: s.border.color }];
-            frame.strokeWeight = s.border.width;
-            // Align strokes to inside usually for web box-sizing: border-box
-            frame.strokeAlign = 'INSIDE';
+            const borderRgb = toRGB(s.border.color);
+            if (borderRgb) {
+                frame.strokes = [{ type: 'SOLID', color: borderRgb, opacity: s.border.color.a ?? 1 }];
+                frame.strokeWeight = s.border.width;
+                // Align strokes to inside usually for web box-sizing: border-box
+                frame.strokeAlign = 'INSIDE';
+            }
         }
 
         // Clipping
@@ -1376,9 +1719,13 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     }
 
     // --- 2. COMMON SIZE & POSITION ---
-    // Size
-    if (s.width && s.height) {
-        node.resize(s.width, s.height);
+    // Size - check if node supports resize (not all node types do)
+    if (s.width && s.height && 'resize' in node) {
+        try {
+            (node as FrameNode).resize(s.width, s.height);
+        } catch (e) {
+            // Some nodes may fail resize in certain contexts, ignore
+        }
     }
 
     // Append to parent BEFORE setting absolute positioning
@@ -1394,10 +1741,15 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
 
     if (isAbsolute) {
         // Set Absolute Positioning
-        // Note: PAGE children are always absolute in Figma terms (x/y), 
+        // Note: PAGE children are always absolute in Figma terms (x/y),
         // but Frame children depend on layout mode.
-        if (parent.type !== 'PAGE') {
-            node.layoutPositioning = 'ABSOLUTE';
+        // Only set layoutPositioning on nodes that support it (not TextNodes in some contexts)
+        if (parent.type !== 'PAGE' && 'layoutPositioning' in node) {
+            try {
+                node.layoutPositioning = 'ABSOLUTE';
+            } catch (e) {
+                // Some nodes don't support layoutPositioning, ignore
+            }
         }
 
         // Calculate Coordinates
@@ -1406,9 +1758,11 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
             node.x = data.globalBounds.x - parentData.globalBounds.x;
             node.y = data.globalBounds.y - parentData.globalBounds.y;
         } else {
-            // Fallback to CSS top/left
-            node.x = s.left || 0;
-            node.y = s.top || 0;
+            // Fallback to CSS top/left, adding margin offset
+            const marginLeft = s.margin?.left || 0;
+            const marginTop = s.margin?.top || 0;
+            node.x = (s.left || 0) + marginLeft;
+            node.y = (s.top || 0) + marginTop;
         }
     } else {
         // Static / AutoLayout
@@ -1527,7 +1881,42 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
     if (data.children) {
         for (const childData of data.children) {
             const childNode = await buildNode(childData, node, data);
-            
+
+            // --- 4.5. FLEX ITEM PROPERTIES ---
+            // Apply flex-grow/shrink/alignSelf to children of flex containers
+            if (childNode && (s.display === 'flex' || s.display === 'inline-flex') && 'layoutGrow' in childNode) {
+                const childStyles = childData.styles || childData;
+
+                // flex-grow: 1 means child should fill available space
+                if (childStyles.flexGrow && childStyles.flexGrow > 0) {
+                    try {
+                        (childNode as FrameNode).layoutGrow = childStyles.flexGrow;
+                    } catch (e) {
+                        // Some nodes don't support layoutGrow
+                    }
+                }
+
+                // align-self overrides the parent's align-items for this child
+                if (childStyles.alignSelf && childStyles.alignSelf !== 'auto') {
+                    try {
+                        const alignMap: Record<string, 'MIN' | 'CENTER' | 'MAX' | 'STRETCH'> = {
+                            'flex-start': 'MIN',
+                            'start': 'MIN',
+                            'center': 'CENTER',
+                            'flex-end': 'MAX',
+                            'end': 'MAX',
+                            'stretch': 'STRETCH',
+                        };
+                        const layoutAlign = alignMap[childStyles.alignSelf];
+                        if (layoutAlign) {
+                            (childNode as FrameNode).layoutAlign = layoutAlign;
+                        }
+                    } catch (e) {
+                        // Some nodes don't support layoutAlign
+                    }
+                }
+            }
+
             // --- 5. GRID ITEM SIZING ---
             // If parent is a grid, apply grid-specific sizing to this child
             if (childNode && s.display === 'grid' && (data as any)._gridInfo) {
@@ -1549,7 +1938,8 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
                     
                     // Calculate width for this item
                     let itemWidth = 0;
-                    const startIdx = 0; // Simplified: assume sequential placement
+                    // Use explicit grid-column-start if provided (CSS is 1-indexed, convert to 0-indexed)
+                    const startIdx = colSpan.start > 0 ? colSpan.start - 1 : 0;
                     
                     for (let i = 0; i < actualSpan && i < gridInfo.tracks.length; i++) {
                         const track = gridInfo.tracks[startIdx + i];
@@ -1585,6 +1975,11 @@ async function buildNode(data: any, parent: SceneNode | PageNode, parentData?: a
                 }
             }
         }
+    }
+
+    // Apply CSS transforms (rotation, translation) after sizing
+    if (s.transform) {
+        applyTransform(node, s.transform);
     }
 
     return node;

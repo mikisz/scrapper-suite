@@ -42,12 +42,20 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         const result = results[0].result;
 
         if (result) {
-            status.textContent = 'Done! JSON copied to clipboard.';
             const jsonStr = JSON.stringify({ url: tab.url, data: result });
             textarea.value = jsonStr;
             textarea.style.display = 'block';
-            textarea.select();
-            document.execCommand('copy');
+
+            // Use modern Clipboard API instead of deprecated execCommand
+            try {
+                await navigator.clipboard.writeText(jsonStr);
+                status.textContent = 'Done! JSON copied to clipboard.';
+            } catch (clipboardErr) {
+                // Fallback: select text for manual copy
+                textarea.select();
+                status.textContent = 'Done! Select and copy the JSON manually.';
+                console.warn('Clipboard write failed:', clipboardErr);
+            }
         } else {
             status.textContent = 'Error: Serializer failed to return data.';
         }

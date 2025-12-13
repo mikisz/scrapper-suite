@@ -433,12 +433,18 @@
           // Robust base extraction
           const urlObj = new URL(apiInputValue);
           proxyBase = urlObj.origin;
+
+          // Force HTTP for localhost (no SSL cert available)
+          if (urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1') {
+            proxyBase = proxyBase.replace('https://', 'http://');
+          }
         } catch (e) {
           // Fallback (unlikely)
           proxyBase = 'https://scrappers.up.railway.app';
         }
 
         const proxyUrl = `${proxyBase}/api/proxy-image?url=${encodeURIComponent(url)}`;
+        console.log('[Image Proxy] API URL:', apiInputValue, '-> Base:', proxyBase, '-> Full:', proxyUrl);
 
         // Try Proxy first (more reliable for CORS)
         fetch(proxyUrl)
