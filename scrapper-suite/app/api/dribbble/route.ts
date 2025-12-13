@@ -1,32 +1,10 @@
 import { NextResponse } from 'next/server';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { browserPool } from '../../lib/browser-pool';
+import { zipDirectory } from '../../lib/archive';
+import { autoScroll } from '../../lib/puppeteer-utils';
 import fs from 'fs-extra';
 import path from 'path';
 import https from 'https';
-import archiver from 'archiver';
-
-puppeteer.use(StealthPlugin());
-
-// Helper functions (same as before)
-async function autoScroll(page: any) {
-    await page.evaluate(async () => {
-        await new Promise<void>((resolve) => {
-            let totalHeight = 0;
-            const distance = 100;
-            const timer = setInterval(() => {
-                const scrollHeight = document.body.scrollHeight;
-                window.scrollBy(0, distance);
-                totalHeight += distance;
-                // Scroll limit
-                if (totalHeight >= scrollHeight || totalHeight > 20000) {
-                    clearInterval(timer);
-                    resolve();
-                }
-            }, 100);
-        });
-    });
-}
 
 function downloadImage(url: string, filepath: string) {
     return new Promise((resolve, reject) => {
@@ -43,21 +21,6 @@ function downloadImage(url: string, filepath: string) {
     });
 }
 
-function zipDirectory(sourceDir: string, outPath: string) {
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    const stream = fs.createWriteStream(outPath);
-
-    return new Promise<void>((resolve, reject) => {
-        archive
-            .directory(sourceDir, false)
-            .on('error', (err: any) => reject(err))
-            .pipe(stream);
-
-        stream.on('close', () => resolve());
-        archive.finalize();
-    });
-}
-
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const username = searchParams.get('username');
@@ -71,10 +34,7 @@ export async function GET(request: Request) {
     const zipPath = path.join(process.cwd(), 'downloads', `${username}.zip`);
 
     try {
-        browser = await puppeteer.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
+        browser = await browserPool.acquire();
 
         const page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
@@ -131,7 +91,7 @@ export async function GET(request: Request) {
             }
         }
 
-        await browser.close();
+        await browserPool.release(browser);
         browser = null;
 
         await zipDirectory(downloadDir, zipPath);
@@ -154,7 +114,7 @@ export async function GET(request: Request) {
 
     } catch (error: any) {
         console.error('Scraping error:', error);
-        if (browser) await browser.close();
+        if (browser) await browserPool.release(browser);
         return NextResponse.json({ error: error.message || 'Scraping failed' }, { status: 500 });
     }
 }

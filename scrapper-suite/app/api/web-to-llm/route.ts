@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
+import { zipDirectory } from '../../lib/archive';
+import { sanitizeImageFilename } from '../../lib/sanitize';
 import fs from 'fs-extra';
 import path from 'path';
-import archiver from 'archiver';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
@@ -21,35 +22,6 @@ async function downloadImage(url: string, filepath: string) {
         await fs.writeFile(filepath, Buffer.from(buffer));
     } catch (error) {
         throw error;
-    }
-}
-
-async function zipDirectory(sourceDir: string, outPath: string) {
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    const stream = fs.createWriteStream(outPath);
-
-    return new Promise<void>((resolve, reject) => {
-        archive
-            .directory(sourceDir, false)
-            .on('error', (err: any) => reject(err))
-            .pipe(stream);
-
-        stream.on('close', () => resolve());
-        archive.finalize();
-    });
-}
-
-function sanitizeFilename(url: string): string {
-    try {
-        const u = new URL(url);
-        const basename = path.basename(u.pathname) || 'image';
-        // Remove query params and weird chars
-        const cleanName = basename.split('?')[0].replace(/[^a-z0-9\._-]/gi, '_');
-        // Ensure extension
-        if (!cleanName.includes('.')) return `${cleanName}.png`;
-        return cleanName;
-    } catch {
-        return `image_${Date.now()}.png`;
     }
 }
 
@@ -157,7 +129,7 @@ export async function POST(request: Request) {
             const src = img.src; // JSDOM handles absolute paths if URL is provided
 
             if (src && !src.startsWith('data:')) {
-                const filename = `${i}_${sanitizeFilename(src)}`;
+                const filename = `${i}_${sanitizeImageFilename(src)}`;
                 const localPath = path.join(imagesDir, filename);
 
                 try {
