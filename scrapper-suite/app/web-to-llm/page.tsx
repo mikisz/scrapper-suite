@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { FileText, Image, FileCode, Printer } from 'lucide-react'; // Example icons if available, using SVGs for now
 
 export default function WebToLlmPage() {
     const [url, setUrl] = useState('');
@@ -10,6 +9,11 @@ export default function WebToLlmPage() {
     const [cleanup, setCleanup] = useState<'article' | 'full'>('article');
     const [format, setFormat] = useState<'markdown' | 'html'>('markdown');
     const [includePdf, setIncludePdf] = useState(false);
+
+    // New options for crawl mode
+    const [mode, setMode] = useState<'single' | 'crawl'>('single');
+    const [maxPages, setMaxPages] = useState(20);
+    const [dismissCookies, setDismissCookies] = useState(true);
 
     const [isLoading, setIsLoading] = useState(false);
     const [status, setStatus] = useState('');
@@ -23,14 +27,26 @@ export default function WebToLlmPage() {
         }
 
         setIsLoading(true);
-        setStatus('Scraping and processing content...');
+        if (mode === 'crawl') {
+            setStatus(`Crawling website (up to ${maxPages} pages)... This may take a while.`);
+        } else {
+            setStatus('Scraping and processing content...');
+        }
         setStatusColor('text-white/80');
 
         try {
             const response = await fetch('/api/web-to-llm', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, format, cleanup, includePdf })
+                body: JSON.stringify({
+                    url,
+                    format,
+                    cleanup,
+                    includePdf: mode === 'single' ? includePdf : false,
+                    mode,
+                    maxPages: mode === 'crawl' ? maxPages : 1,
+                    dismissCookies
+                })
             });
 
             if (!response.ok) {
@@ -98,6 +114,58 @@ export default function WebToLlmPage() {
                         />
                     </div>
 
+                    {/* Scrape Mode Toggle */}
+                    <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+                        <label className="text-sm text-white/60 block mb-3">Scrape Mode</label>
+                        <div className="flex bg-black/20 p-1 rounded-lg">
+                            <button
+                                onClick={() => setMode('single')}
+                                disabled={isLoading}
+                                className={`flex-1 py-2 px-3 rounded text-xs font-medium transition-all ${mode === 'single' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/60'}`}
+                            >
+                                Single Page
+                            </button>
+                            <button
+                                onClick={() => setMode('crawl')}
+                                disabled={isLoading}
+                                className={`flex-1 py-2 px-3 rounded text-xs font-medium transition-all ${mode === 'crawl' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/60'}`}
+                            >
+                                Full Website
+                            </button>
+                        </div>
+                        <p className="text-[10px] text-white/30 mt-2">
+                            {mode === 'single'
+                                ? 'Scrape only the specified URL.'
+                                : 'Crawl entire website following internal links. Generates sitemap and separate file per page.'}
+                        </p>
+                    </div>
+
+                    {/* Max Pages Slider (only in crawl mode) */}
+                    {mode === 'crawl' && (
+                        <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+                            <label className="text-sm text-white/60 block mb-3">
+                                Max Pages: <span className="text-white font-medium">{maxPages}</span>
+                            </label>
+                            <input
+                                type="range"
+                                min="1"
+                                max="100"
+                                value={maxPages}
+                                onChange={(e) => setMaxPages(Number(e.target.value))}
+                                disabled={isLoading}
+                                className="w-full accent-white h-2 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                            />
+                            <div className="flex justify-between text-[10px] text-white/30 mt-1">
+                                <span>1</span>
+                                <span>50</span>
+                                <span>100</span>
+                            </div>
+                            <p className="text-[10px] text-white/30 mt-2">
+                                Limit the number of pages to crawl. Higher values take longer.
+                            </p>
+                        </div>
+                    )}
+
                     {/* Options Grid */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* Cleanup Mode */}
@@ -106,12 +174,14 @@ export default function WebToLlmPage() {
                             <div className="flex bg-black/20 p-1 rounded-lg">
                                 <button
                                     onClick={() => setCleanup('article')}
+                                    disabled={isLoading}
                                     className={`flex-1 py-1.5 px-3 rounded text-xs font-medium transition-all ${cleanup === 'article' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/60'}`}
                                 >
                                     Article Only
                                 </button>
                                 <button
                                     onClick={() => setCleanup('full')}
+                                    disabled={isLoading}
                                     className={`flex-1 py-1.5 px-3 rounded text-xs font-medium transition-all ${cleanup === 'full' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/60'}`}
                                 >
                                     Full Page
@@ -128,12 +198,14 @@ export default function WebToLlmPage() {
                             <div className="flex bg-black/20 p-1 rounded-lg">
                                 <button
                                     onClick={() => setFormat('markdown')}
+                                    disabled={isLoading}
                                     className={`flex-1 py-1.5 px-3 rounded text-xs font-medium transition-all ${format === 'markdown' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/60'}`}
                                 >
                                     Markdown
                                 </button>
                                 <button
                                     onClick={() => setFormat('html')}
+                                    disabled={isLoading}
                                     className={`flex-1 py-1.5 px-3 rounded text-xs font-medium transition-all ${format === 'html' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/60'}`}
                                 >
                                     HTML
@@ -145,18 +217,39 @@ export default function WebToLlmPage() {
                         </div>
                     </div>
 
-                    {/* Checkbox */}
-                    <div className="flex items-center gap-3 ml-1">
-                        <input
-                            type="checkbox"
-                            id="pdf-check"
-                            checked={includePdf}
-                            onChange={(e) => setIncludePdf(e.target.checked)}
-                            className="w-4 h-4 rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"
-                        />
-                        <label htmlFor="pdf-check" className="text-sm text-white/80 cursor-pointer select-none">
-                            Include <b>PDF Snapshot</b> in download
-                        </label>
+                    {/* Checkboxes */}
+                    <div className="flex flex-col gap-3 ml-1">
+                        {/* Cookie Dismissal */}
+                        <div className="flex items-center gap-3">
+                            <input
+                                type="checkbox"
+                                id="cookie-check"
+                                checked={dismissCookies}
+                                onChange={(e) => setDismissCookies(e.target.checked)}
+                                disabled={isLoading}
+                                className="w-4 h-4 rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"
+                            />
+                            <label htmlFor="cookie-check" className="text-sm text-white/80 cursor-pointer select-none">
+                                Auto-dismiss <b>cookie/consent popups</b>
+                            </label>
+                        </div>
+
+                        {/* PDF Snapshot (only in single mode) */}
+                        {mode === 'single' && (
+                            <div className="flex items-center gap-3">
+                                <input
+                                    type="checkbox"
+                                    id="pdf-check"
+                                    checked={includePdf}
+                                    onChange={(e) => setIncludePdf(e.target.checked)}
+                                    disabled={isLoading}
+                                    className="w-4 h-4 rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"
+                                />
+                                <label htmlFor="pdf-check" className="text-sm text-white/80 cursor-pointer select-none">
+                                    Include <b>PDF Snapshot</b> in download
+                                </label>
+                            </div>
+                        )}
                     </div>
 
                     <button
@@ -165,7 +258,7 @@ export default function WebToLlmPage() {
                         className="w-full p-4 bg-white hover:bg-white/90 text-black font-semibold rounded-xl transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center relative shadow-lg shadow-white/10 mt-2"
                     >
                         <span className={isLoading ? 'invisible' : ''}>
-                            Convert & Download ZIP
+                            {mode === 'crawl' ? 'Crawl & Download ZIP' : 'Convert & Download ZIP'}
                         </span>
                         {isLoading && <span className="loader border-black absolute border-t-transparent"></span>}
                     </button>

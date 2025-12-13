@@ -9,6 +9,9 @@ import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { URL } from 'url';
 import { validateScrapingUrl } from '@/app/lib/validation';
+import { dismissCookieModals } from '@/app/lib/cookie-dismissal';
+import { crawlWebsite, buildLinkGraph, type CrawlResult } from '@/app/lib/crawler';
+import { urlToFilePath, normalizeUrl } from '@/app/lib/url-normalizer';
 
 async function downloadImage(url: string, filepath: string) {
     try {
@@ -53,11 +56,162 @@ function sanitizeFilename(url: string): string {
     }
 }
 
+interface ProcessedPage {
+    filePath: string;
+    title: string;
+    url: string;
+    wordCount: number;
+    imageCount: number;
+}
+
+/**
+ * Process a single page's HTML content into markdown/html with images
+ */
+async function processPageContent(
+    html: string,
+    pageUrl: string,
+    format: 'markdown' | 'html',
+    cleanup: 'article' | 'full',
+    imagesDir: string,
+    imagePrefix: string
+): Promise<{ content: string; imageCount: number }> {
+    // Process with JSDOM
+    const dom = new JSDOM(html, { url: pageUrl });
+    let document = dom.window.document;
+
+    // Cleanup if requested
+    if (cleanup === 'article') {
+        const reader = new Readability(document);
+        const article = reader.parse();
+        if (article && article.content) {
+            // Create a new clean DOM from article content
+            const cleanDom = new JSDOM(article.content, { url: pageUrl });
+            document = cleanDom.window.document;
+
+            // Construct Rich Metadata Header
+            const header = document.createElement('div');
+            const siteName = article.siteName || new URL(pageUrl).hostname;
+            const author = article.byline || 'Unknown Author';
+
+            let headerHTML = `
+                <h1>${article.title || 'Untitled'}</h1>
+                <p><em>Source: ${siteName} | Author: ${author}</em></p>
+                <hr/>
+            `;
+
+            if (article.excerpt) {
+                headerHTML += `<blockquote>${article.excerpt}</blockquote><hr/>`;
+            }
+
+            header.innerHTML = headerHTML;
+            document.body.prepend(header);
+        }
+    }
+
+    // Process Images
+    const imgs = Array.from(document.querySelectorAll('img'));
+    let imageCount = 0;
+    for (let i = 0; i < imgs.length; i++) {
+        const img = imgs[i];
+        const src = img.src;
+
+        if (src && !src.startsWith('data:')) {
+            const filename = `${imagePrefix}_${i}_${sanitizeFilename(src)}`;
+            const localPath = path.join(imagesDir, filename);
+
+            try {
+                await downloadImage(src, localPath);
+                img.src = `images/${filename}`;
+                img.removeAttribute('srcset');
+                imageCount++;
+            } catch (e) {
+                console.error(`Failed to download ${src}:`, e);
+            }
+        }
+    }
+
+    let finalContent = '';
+    if (format === 'markdown') {
+        const turndownService = new TurndownService({
+            headingStyle: 'atx',
+            codeBlockStyle: 'fenced'
+        });
+        finalContent = turndownService.turndown(document.body.innerHTML);
+    } else {
+        finalContent = document.body.innerHTML;
+    }
+
+    return { content: finalContent, imageCount };
+}
+
+/**
+ * Generate sitemap markdown file
+ */
+function generateSitemap(
+    pages: ProcessedPage[],
+    baseUrl: string,
+    format: 'markdown' | 'html',
+    crawlDate: Date
+): string {
+    const ext = format === 'markdown' ? '.md' : '.html';
+    const hostname = new URL(baseUrl).hostname;
+
+    let sitemap = `# Site Map: ${hostname}\n\n`;
+    sitemap += `Crawled on: ${crawlDate.toISOString()}\n`;
+    sitemap += `Total pages: ${pages.length}\n`;
+    sitemap += `Format: ${format === 'markdown' ? 'Markdown' : 'HTML'}\n\n`;
+    sitemap += `## Pages\n\n`;
+
+    for (let i = 0; i < pages.length; i++) {
+        const page = pages[i];
+        sitemap += `${i + 1}. [${page.title || 'Untitled'}](pages/${page.filePath}${ext}) - ${page.wordCount} words, ${page.imageCount} images\n`;
+        sitemap += `   - URL: ${page.url}\n`;
+    }
+
+    return sitemap;
+}
+
+/**
+ * Generate metadata JSON file
+ */
+function generateMetadata(
+    pages: ProcessedPage[],
+    baseUrl: string,
+    crawlDate: Date,
+    duration: number,
+    linkGraph: Map<string, any>,
+    format: 'markdown' | 'html'
+): object {
+    const ext = format === 'markdown' ? '.md' : '.html';
+    return {
+        crawlDate: crawlDate.toISOString(),
+        startUrl: baseUrl,
+        totalPages: pages.length,
+        totalImages: pages.reduce((sum, p) => sum + p.imageCount, 0),
+        totalWords: pages.reduce((sum, p) => sum + p.wordCount, 0),
+        crawlDurationMs: duration,
+        format,
+        pages: pages.map(page => {
+            const graphNode = linkGraph.get(normalizeUrl(page.url));
+            return {
+                url: page.url,
+                file: `pages/${page.filePath}${ext}`,
+                title: page.title,
+                wordCount: page.wordCount,
+                imageCount: page.imageCount,
+                outgoingLinks: graphNode?.outgoingLinks?.length || 0,
+                incomingLinks: graphNode?.incomingLinks?.length || 0
+            };
+        })
+    };
+}
+
 export async function POST(request: Request) {
     let browser = null;
     const jobId = Date.now().toString();
     const jobDir = path.join(process.cwd(), 'downloads', `llm_${jobId}`);
     const imagesDir = path.join(jobDir, 'images');
+    const pagesDir = path.join(jobDir, 'pages');
     const zipPath = path.join(process.cwd(), 'downloads', `llm_${jobId}.zip`);
 
     try {
@@ -66,26 +220,42 @@ export async function POST(request: Request) {
             body = await request.json();
         } catch {
             return NextResponse.json(
-                { 
+                {
                     error: 'Invalid request format',
                     suggestion: 'Please send a valid JSON body with a "url" field.'
-                }, 
+                },
                 { status: 400 }
             );
         }
-        
-        const { url, format, cleanup, includePdf } = body;
-        // format: 'markdown' | 'html'
-        // cleanup: 'article' | 'full'
+
+        const {
+            url,
+            format: rawFormat = 'markdown',
+            cleanup: rawCleanup = 'article',
+            includePdf = false,
+            // New options
+            mode: rawMode = 'single',
+            maxPages: rawMaxPages = 20,
+            dismissCookies: rawDismissCookies = true
+        } = body;
+
+        // Validate and sanitize options
+        const format = rawFormat === 'html' ? 'html' : 'markdown';
+        const cleanup = rawCleanup === 'full' ? 'full' : 'article';
+        const mode = rawMode === 'crawl' ? 'crawl' : 'single';
+        const dismissCookies = Boolean(rawDismissCookies);
+
+        // Validate and clamp maxPages (1-500 range, reasonable limit)
+        const maxPages = Math.min(500, Math.max(1, Number(rawMaxPages) || 20));
 
         // Validate URL format and security
         const validation = validateScrapingUrl(url);
         if (!validation.valid) {
             return NextResponse.json(
-                { 
+                {
                     error: validation.error,
                     suggestion: 'Please provide a valid public URL starting with http:// or https://'
-                }, 
+                },
                 { status: 400 }
             );
         }
@@ -97,93 +267,131 @@ export async function POST(request: Request) {
         const page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
 
-        console.log(`Navigating to ${url}`);
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        if (mode === 'crawl') {
+            // ============== CRAWL MODE ==============
+            await fs.ensureDir(pagesDir);
 
-        // Optional PDF
-        if (includePdf) {
-            await page.pdf({
-                path: path.join(jobDir, 'page.pdf'),
-                format: 'A4',
-                printBackground: true
+            console.log(`Starting crawl of ${url} (max ${maxPages} pages)`);
+
+            const crawlResult = await crawlWebsite(page, {
+                maxPages,
+                baseUrl: url,
+                dismissCookies,
+                delayBetweenRequests: 500,
+                timeout: 30000
+            }, (progress) => {
+                console.log(`Crawling [${progress.processed}/${progress.total}]: ${progress.currentUrl}`);
             });
-        }
 
-        // Get HTML content
-        let contentHtml = await page.content();
-        const docUrl = new URL(url);
+            console.log(`Crawl complete: ${crawlResult.successfulPages} pages, ${crawlResult.failedPages} errors`);
 
-        await page.close();
-        await browserPool.release(browser);
-        browser = null;
+            // Process each successful page
+            const processedPages: ProcessedPage[] = [];
+            const ext = format === 'markdown' ? '.md' : '.html';
 
-        // Process with JSDOM
-        const dom = new JSDOM(contentHtml, { url });
-        let document = dom.window.document;
-
-        // Cleanup if requested
-        if (cleanup === 'article') {
-            const reader = new Readability(document);
-            const article = reader.parse();
-            if (article && article.content) {
-                // Create a new clean DOM from article content
-                const cleanDom = new JSDOM(article.content, { url });
-                document = cleanDom.window.document;
-
-                // Construct Rich Metadata Header
-                const header = document.createElement('div');
-                const siteName = article.siteName || new URL(url).hostname;
-                const author = article.byline || 'Unknown Author';
-
-                let headerHTML = `
-                    <h1>${article.title || 'Untitled'}</h1>
-                    <p><em>Source: ${siteName} | Author: ${author}</em></p>
-                    <hr/>
-                `;
-
-                if (article.excerpt) {
-                    headerHTML += `<blockquote>${article.excerpt}</blockquote><hr/>`;
+            for (const result of crawlResult.results) {
+                if (result.error) {
+                    console.log(`Skipping failed page: ${result.url}`);
+                    continue;
                 }
 
-                header.innerHTML = headerHTML;
-                document.body.prepend(header);
+                const filePath = result.filePath;
+                const pageFileDir = path.join(pagesDir, path.dirname(filePath));
+                await fs.ensureDir(pageFileDir);
+
+                const { content, imageCount } = await processPageContent(
+                    result.html,
+                    result.url,
+                    format,
+                    cleanup,
+                    imagesDir,
+                    filePath.replace(/\//g, '_')
+                );
+
+                const fullPath = path.join(pagesDir, `${filePath}${ext}`);
+                await fs.writeFile(fullPath, content);
+
+                const wordCount = content.split(/\s+/).filter(Boolean).length;
+
+                processedPages.push({
+                    filePath,
+                    title: result.title,
+                    url: result.url,
+                    wordCount,
+                    imageCount
+                });
             }
-        }
 
-        // Process Images
-        const imgs = Array.from(document.querySelectorAll('img'));
-        for (let i = 0; i < imgs.length; i++) {
-            const img = imgs[i];
-            const src = img.src; // JSDOM handles absolute paths if URL is provided
+            // Build link graph for metadata
+            const linkGraph = buildLinkGraph(crawlResult.results);
 
-            if (src && !src.startsWith('data:')) {
-                const filename = `${i}_${sanitizeFilename(src)}`;
-                const localPath = path.join(imagesDir, filename);
+            // Generate sitemap
+            const crawlDate = new Date();
+            const sitemap = generateSitemap(processedPages, url, format, crawlDate);
+            await fs.writeFile(path.join(jobDir, 'sitemap.md'), sitemap);
 
-                try {
-                    await downloadImage(src, localPath);
-                    // Update SRC to relative path for Zip
-                    img.src = `images/${filename}`;
-                    img.removeAttribute('srcset'); // Remove srcset to avoid confusion
-                } catch (e) {
-                    console.error(`Failed to download ${src}:`, e);
-                    // Keep original src if download fails, or mark broken?
-                }
-            }
-        }
+            // Generate metadata JSON
+            const metadata = generateMetadata(
+                processedPages,
+                url,
+                crawlDate,
+                crawlResult.crawlDuration,
+                linkGraph,
+                format
+            );
+            await fs.writeFile(
+                path.join(jobDir, 'metadata.json'),
+                JSON.stringify(metadata, null, 2)
+            );
 
-        let finalContent = '';
-        if (format === 'markdown') {
-            const turndownService = new TurndownService({
-                headingStyle: 'atx',
-                codeBlockStyle: 'fenced'
-            });
-            finalContent = turndownService.turndown(document.body.innerHTML);
-            await fs.writeFile(path.join(jobDir, 'content.md'), finalContent);
+            // Close browser before zipping
+            await page.close();
+            await browserPool.release(browser);
+            browser = null;
+
         } else {
-            // Raw HTML
-            finalContent = document.body.innerHTML;
-            await fs.writeFile(path.join(jobDir, 'content.html'), finalContent);
+            // ============== SINGLE PAGE MODE ==============
+            console.log(`Navigating to ${url}`);
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+
+            // Dismiss cookie modals if enabled
+            if (dismissCookies) {
+                const dismissResult = await dismissCookieModals(page);
+                if (dismissResult.dismissed) {
+                    console.log(`Cookie modal dismissed via ${dismissResult.method}: ${dismissResult.selector}`);
+                    // Wait for modal to close and content to be visible
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            }
+
+            // Optional PDF
+            if (includePdf) {
+                await page.pdf({
+                    path: path.join(jobDir, 'page.pdf'),
+                    format: 'A4',
+                    printBackground: true
+                });
+            }
+
+            // Get HTML content
+            const contentHtml = await page.content();
+
+            await page.close();
+            await browserPool.release(browser);
+            browser = null;
+
+            // Process the page
+            const { content } = await processPageContent(
+                contentHtml,
+                url,
+                format,
+                cleanup,
+                imagesDir,
+                'page'
+            );
+
+            const ext = format === 'markdown' ? '.md' : '.html';
+            await fs.writeFile(path.join(jobDir, `content${ext}`), content);
         }
 
         // Zip it
@@ -204,7 +412,7 @@ export async function POST(request: Request) {
     } catch (error: any) {
         console.error('LLM Scraper error:', error);
         if (browser) await browserPool.release(browser);
-        
+
         // Clean up any partial files
         try {
             await fs.remove(jobDir).catch(() => {});
@@ -212,12 +420,12 @@ export async function POST(request: Request) {
         } catch {
             // Ignore cleanup errors
         }
-        
+
         // User-friendly error messages
         const errorMessage = error.message || '';
         let userError = 'Processing failed';
         let suggestion = 'Please try again or use a different URL.';
-        
+
         if (errorMessage.includes('net::ERR_NAME_NOT_RESOLVED')) {
             userError = 'Could not find this website';
             suggestion = 'Please check the URL is spelled correctly.';
@@ -231,13 +439,13 @@ export async function POST(request: Request) {
             userError = 'Network error';
             suggestion = 'Could not access the website. It may be protected or unavailable.';
         }
-        
+
         return NextResponse.json(
-            { 
-                error: userError, 
+            {
+                error: userError,
                 suggestion,
-                details: errorMessage 
-            }, 
+                details: errorMessage
+            },
             { status: 500 }
         );
     }
