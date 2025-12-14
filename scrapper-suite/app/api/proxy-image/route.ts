@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateImageUrl } from '@/app/lib/validation';
+import { logger } from '@/app/lib/logger';
 import sharp from 'sharp';
 
 export const dynamic = 'force-dynamic'; // Prevent static caching
@@ -82,7 +83,7 @@ export async function GET(request: NextRequest) {
                 buffer = convertedBuffer;
                 contentType = 'image/png';
             } catch (conversionError) {
-                console.warn('Image conversion failed, returning original:', conversionError);
+                logger.warn('Image conversion failed, returning original', conversionError);
                 // If conversion fails, return original with original contentType
                 // contentType remains unchanged (normalizedContentType or original)
             }
@@ -105,7 +106,7 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: 'Image fetch timed out' }, { status: 504 });
         }
 
-        console.error('Image Proxy Error:', error);
+        logger.error('Image Proxy Error', error);
         return NextResponse.json({ error: 'Failed to fetch image' }, { status: 500 });
     }
 }

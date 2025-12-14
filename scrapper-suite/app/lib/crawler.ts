@@ -13,6 +13,7 @@ import {
     deduplicateUrls,
     urlToFilePath
 } from './url-normalizer';
+import { logger } from './logger';
 
 export interface CrawlOptions {
     maxPages: number;                    // Maximum pages to crawl
@@ -140,7 +141,7 @@ export async function crawlWebsite(
             if (dismissCookies && isFirstPage) {
                 const dismissResult = await dismissCookieModals(page);
                 if (dismissResult.dismissed) {
-                    console.log(`Cookie modal dismissed via ${dismissResult.method}: ${dismissResult.selector}`);
+                    logger.info(`Cookie modal dismissed via ${dismissResult.method}: ${dismissResult.selector}`);
                     // Wait a bit for modal to close and content to be visible
                     await new Promise(r => setTimeout(r, 500));
                 }
@@ -174,7 +175,7 @@ export async function crawlWebsite(
         } catch (error) {
             errorCount++;
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`Failed to crawl ${currentUrl}: ${errorMessage}`);
+            logger.error(`Failed to crawl ${currentUrl}`, { error: errorMessage });
 
             results.push({
                 url: currentUrl,

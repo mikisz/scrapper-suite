@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
 import { validateScrapingUrl } from '@/app/lib/validation';
+import { logger } from '@/app/lib/logger';
 import fs from 'fs';
 import path from 'path';
 
@@ -198,7 +199,7 @@ export async function POST(request: Request) {
 
     } catch (error) {
         const errorInstance = error instanceof Error ? error : new Error(String(error));
-        console.error('Scraping failed:', errorInstance);
+        logger.error('Scraping failed', errorInstance);
         if (browser) await browserPool.release(browser);
 
         const friendlyError = getUserFriendlyError(errorInstance);

@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
 import { zipDirectory } from '../../lib/archive';
 import { sanitizeScreenshotFilename } from '../../lib/sanitize';
+import { logger } from '@/app/lib/logger';
 import fs from 'fs-extra';
 import path from 'path';
 import { URL } from 'url';
@@ -18,7 +19,7 @@ async function captureAndSave(page: import('puppeteer').Page, url: string, downl
         return true;
     } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        console.error(`Failed to capture ${url}: ${message}`);
+        logger.error(`Failed to capture ${url}`, { error: message });
         return false;
     }
 }
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
                 if (visited.has(currentUrl)) continue;
 
                 visited.add(currentUrl);
-                console.log(`Processing [${count + 1}/${MAX_PAGES_RECURSIVE}]: ${currentUrl}`);
+                logger.info(`Processing [${count + 1}/${MAX_PAGES_RECURSIVE}]: ${currentUrl}`);
 
                 const success = await captureAndSave(page, currentUrl, downloadDir, count + 1);
                 if (success) {
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
 
             for (let i = 0; i < urls.length; i++) {
                 const currentUrl = urls[i];
-                console.log(`Processing [${i + 1}/${urls.length}]: ${currentUrl}`);
+                logger.info(`Processing [${i + 1}/${urls.length}]: ${currentUrl}`);
                 await captureAndSave(page, currentUrl, downloadDir, i + 1);
             }
         } else {
@@ -110,7 +111,7 @@ export async function POST(request: Request) {
 
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error('Scraping error:', error);
+        logger.error('Scraping error', error);
         if (browser) await browserPool.release(browser);
         return NextResponse.json({ error: message || 'Scraping failed' }, { status: 500 });
     }
