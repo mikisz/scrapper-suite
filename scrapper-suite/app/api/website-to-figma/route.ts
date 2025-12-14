@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
 import { validateScrapingUrl } from '@/app/lib/validation';
 import { logger } from '@/app/lib/logger';
+import { applyRateLimit, RATE_LIMITS } from '@/app/lib/rate-limiter';
 import { getComponentDetectorScript, DetectionResult } from '@/app/lib/component-detector';
 import { getStyleInjectorScript, ThemeType } from '@/app/lib/style-injector';
 import { getVariantExtractorScript } from '@/app/lib/variant-extractor';
@@ -134,8 +135,12 @@ function getUserFriendlyError(error: Error): { error: string; suggestion?: strin
 }
 
 export async function POST(request: Request) {
+    // Apply rate limiting
+    const rateLimitResponse = applyRateLimit(request, 'website-to-figma', RATE_LIMITS.scraping);
+    if (rateLimitResponse) return rateLimitResponse;
+
     let browser = null;
-    
+
     try {
         let body;
         try {

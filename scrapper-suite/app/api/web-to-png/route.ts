@@ -4,6 +4,7 @@ import { browserPool } from '../../lib/browser-pool';
 import { zipDirectory } from '../../lib/archive';
 import { sanitizeScreenshotFilename } from '../../lib/sanitize';
 import { logger } from '@/app/lib/logger';
+import { applyRateLimit, RATE_LIMITS } from '@/app/lib/rate-limiter';
 import fs from 'fs-extra';
 import path from 'path';
 import { URL } from 'url';
@@ -37,6 +38,10 @@ async function getInternalLinks(page: import('puppeteer').Page, baseUrl: string)
 }
 
 export async function POST(request: Request) {
+    // Apply rate limiting
+    const rateLimitResponse = applyRateLimit(request, 'web-to-png', RATE_LIMITS.scraping);
+    if (rateLimitResponse) return rateLimitResponse;
+
     let browser = null;
     const downloadId = Date.now().toString();
     const downloadDir = path.join(process.cwd(), 'downloads', `web_${downloadId}`);
