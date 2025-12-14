@@ -345,11 +345,12 @@ export async function POST(request: Request) {
             throw error;
         }
 
-    } catch (error: any) {
-        console.error('Scraping failed:', error);
+    } catch (error) {
+        const errorInstance = error instanceof Error ? error : new Error(String(error));
+        console.error('Scraping failed:', errorInstance);
         if (browser) await browserPool.release(browser);
-        
-        const friendlyError = getUserFriendlyError(error);
+
+        const friendlyError = getUserFriendlyError(errorInstance);
         return NextResponse.json(friendlyError, { status: 500 });
     }
 }

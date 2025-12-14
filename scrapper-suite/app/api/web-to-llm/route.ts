@@ -152,12 +152,20 @@ function generateSitemap(
 /**
  * Generate metadata JSON file
  */
+interface LinkGraphNode {
+    url: string;
+    title: string;
+    filePath: string;
+    outgoingLinks: string[];
+    incomingLinks: string[];
+}
+
 function generateMetadata(
     pages: ProcessedPage[],
     baseUrl: string,
     crawlDate: Date,
     duration: number,
-    linkGraph: Map<string, any>,
+    linkGraph: Map<string, LinkGraphNode>,
     format: 'markdown' | 'html'
 ): object {
     const ext = format === 'markdown' ? '.md' : '.html';
@@ -397,8 +405,9 @@ export async function POST(request: Request) {
             },
         });
 
-    } catch (error: any) {
-        console.error('LLM Scraper error:', error);
+    } catch (error) {
+        const errorInstance = error instanceof Error ? error : new Error(String(error));
+        console.error('LLM Scraper error:', errorInstance);
         if (browser) await browserPool.release(browser);
 
         // Clean up any partial files
@@ -410,7 +419,7 @@ export async function POST(request: Request) {
         }
 
         // User-friendly error messages
-        const errorMessage = error.message || '';
+        const errorMessage = errorInstance.message || '';
         let userError = 'Processing failed';
         let suggestion = 'Please try again or use a different URL.';
 

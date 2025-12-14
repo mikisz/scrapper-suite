@@ -86,8 +86,9 @@ export async function GET(request: Request) {
                     const filename = `${username}_shot_${i + 1}${ext}`;
                     await downloadImage(cleanUrl, path.join(downloadDir, filename));
                 }
-            } catch (err: any) {
-                console.error(`Failed to scrape shot ${link}:`, err.message);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                console.error(`Failed to scrape shot ${link}:`, message);
             }
         }
 
@@ -112,9 +113,10 @@ export async function GET(request: Request) {
             },
         });
 
-    } catch (error: any) {
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Scraping error:', error);
         if (browser) await browserPool.release(browser);
-        return NextResponse.json({ error: error.message || 'Scraping failed' }, { status: 500 });
+        return NextResponse.json({ error: message || 'Scraping failed' }, { status: 500 });
     }
 }

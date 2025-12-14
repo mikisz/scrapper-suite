@@ -13,7 +13,9 @@
  */
 
 // Load the serializer into jsdom's window
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require('fs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require('path');
 
 // Helper to mock getBoundingClientRect for all elements
@@ -280,10 +282,11 @@ describe('FigmaSerializer', () => {
       `;
       const result = window.FigmaSerializer.serialize(document.body);
       const div = result.children[0];
-      
+
       expect(div.styles.border.width).toBe(2);
       expect(div.styles.border.style).toBe('solid');
-      expect(div.styles.border.color).toEqual({ r: 1, g: 0, b: 0 });
+      // Implementation includes alpha channel
+      expect(div.styles.border.color).toEqual({ r: 1, g: 0, b: 0, a: 1 });
     });
 
     it('should extract box-shadow', () => {
@@ -318,11 +321,13 @@ describe('FigmaSerializer', () => {
       `;
       const result = window.FigmaSerializer.serialize(document.body);
       const textNode = result.children[0];
-      
+
+      // Implementation includes alpha channel
       expect(textNode.backgroundColor).toEqual({
         r: 1,
         g: 128 / 255,
         b: 64 / 255,
+        a: 1,
       });
     });
 
@@ -332,9 +337,9 @@ describe('FigmaSerializer', () => {
       `;
       const result = window.FigmaSerializer.serialize(document.body);
       const textNode = result.children[0];
-      
-      // Note: Our getRgb function only extracts RGB, not alpha
-      expect(textNode.backgroundColor).toEqual({ r: 1, g: 0, b: 0 });
+
+      // Implementation includes alpha channel
+      expect(textNode.backgroundColor).toEqual({ r: 1, g: 0, b: 0, a: 0.5 });
     });
 
     it('should return null for transparent colors', () => {
@@ -353,11 +358,13 @@ describe('FigmaSerializer', () => {
       `;
       const result = window.FigmaSerializer.serialize(document.body);
       const textNode = result.children[0];
-      
+
+      // Implementation includes alpha channel
       expect(textNode.color).toEqual({
         r: 0,
         g: 128 / 255,
         b: 1,
+        a: 1,
       });
     });
   });
@@ -371,10 +378,12 @@ describe('FigmaSerializer', () => {
       `;
       const result = window.FigmaSerializer.serialize(document.body);
       const div = result.children[0];
-      
+
+      // Implementation includes size property
       expect(div.styles.backgroundImage).toEqual({
         type: 'IMAGE',
         url: 'https://example.com/image.jpg',
+        size: '',
       });
     });
 
