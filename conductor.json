@@ -1,0 +1,7 @@
+{
+    "scripts": {
+        "setup": "cd scrapper-suite && npm install",
+        "run": "cd scrapper-suite && npm run dev -- --port $CONDUCTOR_PORT"
+    },
+    "runScriptMode": "nonconcurrent"
+}
