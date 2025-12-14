@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
 import { validateScrapingUrl } from '@/app/lib/validation';
-import { getComponentDetectorScript, DetectedComponent, DetectionResult } from '@/app/lib/component-detector';
+import { getComponentDetectorScript, DetectionResult } from '@/app/lib/component-detector';
 import { getStyleInjectorScript, ThemeType } from '@/app/lib/style-injector';
 import { getVariantExtractorScript } from '@/app/lib/variant-extractor';
 import fs from 'fs';
@@ -16,10 +16,22 @@ interface ComponentDocsOptions {
     excludeSelectors?: string[];
 }
 
+// Figma tree node structure returned by the DOM serializer
+interface FigmaTreeNode {
+    type: string;
+    name?: string;
+    children?: FigmaTreeNode[];
+    globalBounds?: { x: number; y: number; width: number; height: number };
+    componentName?: string | null;
+    componentVariant?: string | null;
+    componentBounds?: { x: number; y: number; width: number; height: number };
+    [key: string]: unknown;
+}
+
 interface ExtractedComponent {
     name: string;
     variant?: string;
-    tree: any;
+    tree: FigmaTreeNode;
     bounds: { x: number; y: number; width: number; height: number };
 }
 
@@ -209,7 +221,7 @@ export async function POST(request: Request) {
                     const styleInjectorScript = getStyleInjectorScript(theme);
                     await page.evaluate(styleInjectorScript);
                     // Wait for Tailwind CDN to load and process
-                    await page.waitForFunction(() => typeof (window as any).tailwind !== 'undefined', { timeout: 5000 }).catch(() => {
+                    await page.waitForFunction(() => typeof (window as unknown as { tailwind?: unknown }).tailwind !== 'undefined', { timeout: 5000 }).catch(() => {
                         console.log('Tailwind CDN did not load, continuing without it');
                     });
                     // Additional wait for styles to apply
@@ -251,7 +263,7 @@ export async function POST(request: Request) {
                             (selector: string, name: string, variantName: string | null) => {
                                 const element = document.querySelector(selector);
                                 if (!element) return null;
-                                // @ts-ignore
+                                // @ts-expect-error FigmaSerializer is injected at runtime
                                 return window.FigmaSerializer.serializeElement(element, {
                                     name,
                                     variant: variantName
@@ -307,7 +319,7 @@ export async function POST(request: Request) {
 
             // FULL-PAGE MODE (default)
             const figmaTree = await page.evaluate(() => {
-                // @ts-ignore
+                // @ts-expect-error FigmaSerializer is injected at runtime
                 return window.FigmaSerializer.serialize(document.body);
             });
 
