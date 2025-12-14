@@ -1,16 +1,17 @@
 import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
+import { zipDirectory } from '../../lib/archive';
+import { sanitizeImageFilename } from '../../lib/sanitize';
 import fs from 'fs-extra';
 import path from 'path';
-import archiver from 'archiver';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { URL } from 'url';
 import { validateScrapingUrl } from '@/app/lib/validation';
 import { dismissCookieModals, hasCookieModal } from '@/app/lib/cookie-dismissal';
-import { crawlWebsite, buildLinkGraph, type CrawlResult } from '@/app/lib/crawler';
+import { crawlWebsite, buildLinkGraph } from '@/app/lib/crawler';
 import { normalizeUrl } from '@/app/lib/url-normalizer';
 
 async function downloadImage(url: string, filepath: string) {
@@ -24,35 +25,6 @@ async function downloadImage(url: string, filepath: string) {
         await fs.writeFile(filepath, Buffer.from(buffer));
     } catch (error) {
         throw error;
-    }
-}
-
-async function zipDirectory(sourceDir: string, outPath: string) {
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    const stream = fs.createWriteStream(outPath);
-
-    return new Promise<void>((resolve, reject) => {
-        archive
-            .directory(sourceDir, false)
-            .on('error', (err: any) => reject(err))
-            .pipe(stream);
-
-        stream.on('close', () => resolve());
-        archive.finalize();
-    });
-}
-
-function sanitizeFilename(url: string): string {
-    try {
-        const u = new URL(url);
-        const basename = path.basename(u.pathname) || 'image';
-        // Remove query params and weird chars
-        const cleanName = basename.split('?')[0].replace(/[^a-z0-9\._-]/gi, '_');
-        // Ensure extension
-        if (!cleanName.includes('.')) return `${cleanName}.png`;
-        return cleanName;
-    } catch {
-        return `image_${Date.now()}.png`;
     }
 }
 
@@ -118,7 +90,7 @@ async function processPageContent(
         const src = img.src;
 
         if (src && !src.startsWith('data:')) {
-            const filename = `${imagePrefix}_${i}_${sanitizeFilename(src)}`;
+            const filename = `${imagePrefix}_${i}_${sanitizeImageFilename(src)}`;
             const localPath = path.join(imagesDir, filename);
 
             try {

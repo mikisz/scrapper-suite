@@ -12,12 +12,14 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
 
     function getRgb(color) {
         if (!color || color === 'transparent' || color === 'rgba(0, 0, 0, 0)') return null;
-        const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        // Match rgba with optional alpha: rgba(r, g, b, a) or rgb(r, g, b)
+        const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
         if (match) {
             return {
                 r: parseInt(match[1]) / 255,
                 g: parseInt(match[2]) / 255,
                 b: parseInt(match[3]) / 255,
+                a: match[4] !== undefined ? parseFloat(match[4]) : 1,
             };
         }
         return null; // Return null for transparent/invalid
@@ -37,17 +39,48 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
         const bgImage = computed.backgroundImage;
         if (!bgImage || bgImage === 'none') return null;
 
+        // Check for Gradient first (before URL check, as gradients may contain url())
+        if (bgImage.includes('gradient')) {
+            return { type: 'GRADIENT', raw: bgImage };
+        }
+
         // Check for URL
         const urlMatch = bgImage.match(/url\(['"]?(.*?)['"]?\)/);
         if (urlMatch) {
-            return { type: 'IMAGE', url: urlMatch[1] };
+            const url = urlMatch[1];
+            if (!url) return null;
+
+            // Skip tiny placeholder data URIs (1x1 gif, etc.)
+            if (url.startsWith('data:')) {
+                if (url.length < 200) return null; // Too small, likely placeholder
+                if (!url.startsWith('data:image/')) return null; // Not an image data URI
+                return { type: 'IMAGE', url, size: computed.backgroundSize };
+            }
+
+            // Skip URLs that are clearly not images
+            const urlLower = url.toLowerCase();
+            const isLikelyNotImage = (
+                urlLower.endsWith('.html') ||
+                urlLower.endsWith('.htm') ||
+                urlLower.endsWith('.php') ||
+                urlLower.endsWith('.asp') ||
+                urlLower.endsWith('.aspx') ||
+                urlLower.endsWith('.jsp') ||
+                urlLower.endsWith('.js') ||
+                urlLower.endsWith('.css') ||
+                urlLower.endsWith('.json') ||
+                urlLower.endsWith('.xml')
+            );
+
+            if (isLikelyNotImage) {
+                return null;
+            }
+
+            // Accept all other URLs - they may be images served from query-string endpoints
+            // or dynamically served without extensions
+            return { type: 'IMAGE', url, size: computed.backgroundSize };
         }
 
-        // Check for Gradient (simplified)
-        if (bgImage.includes('gradient')) {
-            // We'll pass the raw string for now, Figma plugin will have to try to parse or ignore
-            return { type: 'GRADIENT', raw: bgImage };
-        }
         return null;
     }
 
@@ -236,6 +269,7 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
             backgroundImage: bgImage,
             backgroundSize: computed.backgroundSize,
             backgroundPosition: computed.backgroundPosition,
+            backgroundRepeat: computed.backgroundRepeat,
             borderRadius: {
                 topLeft: parseUnit(computed.borderTopLeftRadius),
                 topRight: parseUnit(computed.borderTopRightRadius),
@@ -360,6 +394,17 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                     bottom: parseUnit(computed.paddingBottom),
                     left: parseUnit(computed.paddingLeft),
                 },
+                margin: {
+                    top: parseUnit(computed.marginTop),
+                    right: parseUnit(computed.marginRight),
+                    bottom: parseUnit(computed.marginBottom),
+                    left: parseUnit(computed.marginLeft),
+                },
+                // Flex item properties (for children in flex containers)
+                flexGrow: parseFloat(computed.flexGrow) || 0,
+                flexShrink: parseFloat(computed.flexShrink) || 1,
+                flexBasis: computed.flexBasis,
+                alignSelf: computed.alignSelf,
                 backgroundColor: getRgb(computed.backgroundColor),
                 backgroundImage: getBackground(computed), // New
                 borderRadius: {
@@ -372,6 +417,7 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 fontSize: parseUnit(computed.fontSize),
                 fontWeight: computed.fontWeight,
                 fontFamily: computed.fontFamily,
+                fontStyle: computed.fontStyle, // italic, normal, oblique
                 lineHeight: computed.lineHeight,
                 textAlign: computed.textAlign,
                 opacity: parseFloat(computed.opacity) || 1,
@@ -385,6 +431,7 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
 
                 // Advanced Visuals
                 boxShadow: computed.boxShadow !== 'none' ? computed.boxShadow : null,
+                textShadow: computed.textShadow !== 'none' ? computed.textShadow : null,
                 letterSpacing: parseUnit(computed.letterSpacing),
                 textTransform: computed.textTransform,
                 textDecoration: computed.textDecorationLine, // computed style often splits decoration
@@ -395,10 +442,42 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
 
             // Handling Images
             if (isImage) {
+                // Get the best available image source
+                // Priority: currentSrc (resolved from srcset) > data-src (lazy-load) > src
+                let imageSrc = el.currentSrc || el.src;
+
+                // Check for lazy-loading attributes (common patterns)
+                if (!imageSrc || imageSrc.startsWith('data:image/gif') || imageSrc.startsWith('data:image/svg')) {
+                    // Try common lazy-load attribute patterns
+                    imageSrc = el.getAttribute('data-src') ||
+                               el.getAttribute('data-lazy-src') ||
+                               el.getAttribute('data-original') ||
+                               el.getAttribute('data-srcset')?.split(',')[0]?.trim().split(' ')[0] ||
+                               el.srcset?.split(',')[0]?.trim().split(' ')[0] ||
+                               imageSrc;
+                }
+
+                // Skip placeholder data URIs (1x1 transparent GIF, etc.)
+                const isPlaceholder = !imageSrc || (
+                    imageSrc.startsWith('data:image/gif;base64,R0lGOD') ||
+                    imageSrc.startsWith('data:image/svg+xml') ||
+                    (imageSrc.length < 200 && imageSrc.startsWith('data:'))
+                );
+
+                // Skip placeholder images entirely - they have no visual content
+                if (isPlaceholder) {
+                    return null;
+                }
+
                 return {
                     type: 'IMAGE',
-                    src: el.src,
+                    src: imageSrc,
                     boxShadow: computed.boxShadow !== 'none' ? computed.boxShadow : null, // Support shadow on img
+                    objectFit: computed.objectFit, // cover, contain, fill, etc.
+                    aspectRatio: computed.aspectRatio, // e.g., "16 / 9" or "auto"
+                    // Natural image dimensions if available
+                    naturalWidth: el.naturalWidth || null,
+                    naturalHeight: el.naturalHeight || null,
                     styles,
                     tag: 'img'
                 };

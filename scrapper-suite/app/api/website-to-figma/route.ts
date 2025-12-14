@@ -130,6 +130,37 @@ export async function POST(request: Request) {
             await page.setViewport({ width: 1440, height: 900 });
             await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
 
+            // Scroll page to trigger lazy-loaded images
+            await page.evaluate(async () => {
+                const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+                const scrollHeight = document.body.scrollHeight;
+                const viewportHeight = window.innerHeight;
+
+                // Scroll down in steps to trigger lazy loading
+                for (let y = 0; y < scrollHeight; y += viewportHeight) {
+                    window.scrollTo(0, y);
+                    await delay(100); // Wait for lazy images to start loading
+                }
+
+                // Scroll back to top
+                window.scrollTo(0, 0);
+                await delay(200);
+            });
+
+            // Wait for images to load (with timeout)
+            await page.evaluate(async () => {
+                const images = Array.from(document.querySelectorAll('img'));
+                const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+                // Wait up to 3 seconds for images to load
+                const timeout = Date.now() + 3000;
+                while (Date.now() < timeout) {
+                    const unloaded = images.filter(img => !img.complete || img.naturalHeight === 0);
+                    if (unloaded.length === 0) break;
+                    await delay(100);
+                }
+            });
+
             // Inject the shared serializer
             const serializerPath = path.join(process.cwd(), 'app/lib/dom-serializer.js');
             const serializerCode = fs.readFileSync(serializerPath, 'utf8');

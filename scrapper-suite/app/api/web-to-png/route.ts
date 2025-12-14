@@ -1,44 +1,19 @@
 import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
+import { zipDirectory } from '../../lib/archive';
+import { sanitizeScreenshotFilename } from '../../lib/sanitize';
 import fs from 'fs-extra';
 import path from 'path';
-import archiver from 'archiver';
 import { URL } from 'url';
 
 const MAX_PAGES_RECURSIVE = 20;
-
-async function zipDirectory(sourceDir: string, outPath: string) {
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    const stream = fs.createWriteStream(outPath);
-
-    return new Promise<void>((resolve, reject) => {
-        archive
-            .directory(sourceDir, false)
-            .on('error', (err: any) => reject(err))
-            .pipe(stream);
-
-        stream.on('close', () => resolve());
-        archive.finalize();
-    });
-}
-
-function sanitizeFilename(url: string, index: number): string {
-    try {
-        const u = new URL(url);
-        let name = u.hostname + u.pathname.replace(/\//g, '_');
-        if (name.endsWith('_')) name = name.slice(0, -1);
-        return `${index}_${name.replace(/[^a-z0-9]/gi, '_').substring(0, 100)}.png`;
-    } catch {
-        return `${index}_screenshot.png`;
-    }
-}
 
 async function captureAndSave(page: any, url: string, downloadDir: string, index: number) {
     try {
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
         const cleanUrl = url.split('?')[0]; // simple cleanup
-        const filename = sanitizeFilename(cleanUrl, index);
+        const filename = sanitizeScreenshotFilename(cleanUrl, index);
         await page.screenshot({ path: path.join(downloadDir, filename), fullPage: true });
         return true;
     } catch (e: any) {
