@@ -2,6 +2,27 @@
 
 figma.showUI(__html__, { width: 300, height: 450 });
 
+// Type definitions for component-docs mode
+interface ComponentDocsMetadata {
+    pageTitle: string;
+    libraryDetected: string | null;
+    totalComponentsFound: number;
+    themeApplied: string;
+}
+
+interface ComponentDocsDoneSummary {
+    type: 'done';
+    mode: 'component-docs';
+    stats: {
+        totalNodes: number;
+        totalComponents: number;
+        imagesLoaded: number;
+        totalImages: number;
+    };
+    metadata: ComponentDocsMetadata;
+    warnings?: string[];
+}
+
 // Progress tracking
 let totalNodes = 0;
 let processedNodes = 0;
@@ -381,7 +402,7 @@ figma.ui.onmessage = async (msg) => {
             }
 
             // Send completion
-            const summary: any = {
+            const summary: ComponentDocsDoneSummary = {
                 type: 'done',
                 mode: 'component-docs',
                 stats: {
@@ -391,11 +412,8 @@ figma.ui.onmessage = async (msg) => {
                     totalImages: imageCache.size,
                 },
                 metadata,
+                ...(warnings.length > 0 && { warnings }),
             };
-
-            if (warnings.length > 0) {
-                summary.warnings = warnings;
-            }
 
             figma.ui.postMessage(summary);
 

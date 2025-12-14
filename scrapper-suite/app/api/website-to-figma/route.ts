@@ -224,7 +224,8 @@ export async function POST(request: Request) {
                     await page.waitForFunction(() => typeof (window as unknown as { tailwind?: unknown }).tailwind !== 'undefined', { timeout: 5000 }).catch(() => {
                         console.log('Tailwind CDN did not load, continuing without it');
                     });
-                    // Additional wait for styles to apply
+                    // The Tailwind Play CDN runs a JIT compiler over the DOM. There's no event
+                    // to signal completion, so we use a short delay to allow time for styles to be applied.
                     await new Promise(resolve => setTimeout(resolve, 500));
                 }
 
@@ -251,11 +252,8 @@ export async function POST(request: Request) {
                     tagStructure: string;
                 } | null>;
 
-                // 4. Serialize each detected component
-                const extractedComponents: ExtractedComponent[] = [];
-
-                for (let i = 0; i < detectionResult.components.length; i++) {
-                    const detected = detectionResult.components[i];
+                // 4. Serialize each detected component in parallel for better performance
+                const componentPromises = detectionResult.components.map(async (detected, i) => {
                     const variant = variantInfo[i];
 
                     try {
@@ -275,17 +273,21 @@ export async function POST(request: Request) {
                         );
 
                         if (componentTree) {
-                            extractedComponents.push({
+                            return {
                                 name: variant?.name || detected.name,
                                 variant: variant?.variant || detected.variant,
                                 tree: componentTree,
                                 bounds: detected.bounds,
-                            });
+                            };
                         }
                     } catch (e) {
                         console.warn(`Failed to serialize component: ${detected.selector}`, e);
                     }
-                }
+                    return null;
+                });
+
+                const extractedComponents = (await Promise.all(componentPromises))
+                    .filter((c): c is ExtractedComponent => c !== null);
 
                 // Get page title
                 const pageTitle = await page.title();

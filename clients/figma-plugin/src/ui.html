@@ -329,22 +329,22 @@
     // Current mode state
     let currentMode = 'full-page';
 
-    // Mode toggle handlers
-    modeFullPageBtn.onclick = () => {
-      currentMode = 'full-page';
-      modeFullPageBtn.classList.add('active');
-      modeComponentsBtn.classList.remove('active');
-      componentOptions.style.display = 'none';
-      targetUrlInput.placeholder = 'https://dribbble.com';
-    };
+    // Mode toggle handler
+    function setMode(newMode) {
+      currentMode = newMode;
+      const isComponentsMode = newMode === 'component-docs';
 
-    modeComponentsBtn.onclick = () => {
-      currentMode = 'component-docs';
-      modeComponentsBtn.classList.add('active');
-      modeFullPageBtn.classList.remove('active');
-      componentOptions.style.display = 'block';
-      targetUrlInput.placeholder = 'https://ui.shadcn.com/docs/components/button';
-    };
+      modeFullPageBtn.classList.toggle('active', !isComponentsMode);
+      modeComponentsBtn.classList.toggle('active', isComponentsMode);
+
+      componentOptions.style.display = isComponentsMode ? 'block' : 'none';
+      targetUrlInput.placeholder = isComponentsMode
+        ? 'https://ui.shadcn.com/docs/components/button'
+        : 'https://dribbble.com';
+    }
+
+    modeFullPageBtn.onclick = () => setMode('full-page');
+    modeComponentsBtn.onclick = () => setMode('component-docs');
 
     function setStatus(msg, type = '') {
       statusDiv.textContent = msg;
