@@ -37,7 +37,7 @@ The following improvements have been implemented:
 ### Phase 5: Console Logging Migration
 - [x] **Replaced all console.log/error/warn** - Migrated 20 instances across 6 files to use logger utility
 
-**Total test coverage: 238 tests, all passing**
+**Total test coverage: 259 tests, all passing**
 
 ---
 
@@ -57,12 +57,24 @@ Only 1 legitimate `@ts-expect-error` remains in `website-to-figma/route.ts` for 
 All console statements in backend code migrated to logger utility (`app/lib/logger.ts`).
 - Figma plugin (`clients/figma-plugin/src/code.ts`) still uses console.log (acceptable for browser context)
 
-### 2.4 Large Files Needing Refactoring
+### 2.4 Large Files Needing Refactoring ✅ RESOLVED
 
-| File | Lines | Recommendation |
-|------|-------|----------------|
-| `clients/figma-plugin/src/code.ts` | 1,934 | Split into modules: `renderer.ts`, `styles.ts`, `images.ts` |
-| `scrapper-suite/app/lib/dom-serializer.js` | 609 | **Note:** Must remain JS - injected directly into browser contexts via `page.evaluate()` |
+| File | Lines | Status |
+|------|-------|--------|
+| `clients/figma-plugin/src/code.ts` | 347 | ✅ Split into 7 modules |
+| `scrapper-suite/app/lib/dom-serializer.js` | 609 | N/A - Must remain JS (injected into browser) |
+
+**Figma Plugin Module Structure:**
+```
+clients/figma-plugin/src/
+├── code.ts          # Main entry, message handling (347 lines)
+├── types.ts         # Shared interfaces (164 lines)
+├── fonts.ts         # Font loading & mapping (355 lines)
+├── styles.ts        # Color/gradient/shadow parsing (512 lines)
+├── images.ts        # Image downloading & caching (128 lines)
+├── grid.ts          # CSS Grid parsing (183 lines)
+└── renderer.ts      # buildNode() function (768 lines)
+```
 
 ### 2.5 Magic Numbers (15+ instances)
 Hardcoded values should move to configuration:
@@ -106,9 +118,11 @@ export const CONFIG = {
 
 ### Remaining Untested Components
 
-| Component | Lines | Risk Level | Recommended Test File |
-|-----------|-------|------------|----------------------|
-| `archive.ts` | 38 | LOW | `archive.test.ts` |
+| Component | Lines | Risk Level | Status |
+|-----------|-------|------------|--------|
+| `archive.ts` | 38 | LOW | ✅ TESTED (9 tests) |
+
+All backend components now have test coverage.
 
 ### Test Coverage Targets
 Add to `jest.config.js`:
@@ -243,10 +257,10 @@ clients/figma-plugin/src/
 - [x] Add sanitize.ts tests
 - [x] Add puppeteer-utils.ts tests
 
-### Phase 4: Code Quality ✅ MOSTLY COMPLETE
+### Phase 4: Code Quality ✅ COMPLETE
 - [x] Extract magic numbers to config
 - [x] Replace console.log with logger utility
-- [ ] Split large files into modules (REMAINING - lower priority)
+- [x] Split large files into modules (Figma plugin `code.ts` → 7 modules)
 
 ### Phase 5: Documentation ✅ MOSTLY COMPLETE
 - [x] Create API.md with endpoint documentation
@@ -268,8 +282,16 @@ clients/figma-plugin/src/
 1. ~~**Create API.md**~~ ✅ Done - Comprehensive endpoint documentation
 2. ~~**Add rate limiting**~~ ✅ Done - Per-endpoint limits with `rate-limiter.ts`
 3. ~~**Image size limits**~~ ✅ Done - 10MB limit with timeout
-4. **Split large files** - `code.ts` into modules (lower priority)
-5. **Create TROUBLESHOOTING.md** - Common issues and solutions (optional)
+4. ~~**Split large files**~~ ✅ Done - `code.ts` split into 7 modules
+5. ~~**Add archive.ts tests**~~ ✅ Done - 9 tests added
+6. **Create TROUBLESHOOTING.md** - Common issues and solutions (optional)
+
+## Current Status: Phase 9 Complete
+
+**All Phase 9 (Testing & Quality) items are complete:**
+- 259 tests passing across 13 test files
+- All backend components have test coverage
+- Figma plugin refactored into maintainable modules
 
 ---
 

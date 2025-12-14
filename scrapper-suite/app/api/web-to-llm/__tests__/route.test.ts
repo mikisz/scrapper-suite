@@ -51,6 +51,7 @@ jest.mock('fs-extra', () => ({
   writeFile: jest.fn(),
   remove: jest.fn(),
   readFile: jest.fn(() => Promise.resolve(Buffer.from('mock-zip-content'))),
+  pathExists: jest.fn(() => Promise.resolve(true)),
   createWriteStream: jest.fn(() => ({
     on: jest.fn((event, cb) => {
       if (event === 'close') setTimeout(cb, 10);

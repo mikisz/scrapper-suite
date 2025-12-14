@@ -14,12 +14,19 @@ import fs from 'fs-extra';
  * @param outPath - Output path for the zip file
  * @param options - Optional archiver options
  * @returns Promise that resolves when zip is complete
+ * @throws Error if source directory does not exist
  */
 export async function zipDirectory(
     sourceDir: string,
     outPath: string,
     options: { compressionLevel?: number } = {}
 ): Promise<void> {
+    // Validate source directory exists
+    const exists = await fs.pathExists(sourceDir);
+    if (!exists) {
+        throw new Error(`Source directory does not exist: ${sourceDir}`);
+    }
+
     const { compressionLevel = 9 } = options;
 
     const archive = archiver('zip', { zlib: { level: compressionLevel } });

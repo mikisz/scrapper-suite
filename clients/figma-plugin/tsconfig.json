@@ -1,6 +1,7 @@
 {
     "compilerOptions": {
         "target": "es6",
+        "module": "ESNext",
         "lib": [
             "es2016",
             "dom"
@@ -10,7 +11,9 @@
             "./node_modules/@types",
             "./node_modules/@figma"
         ],
-        "moduleResolution": "node"
+        "moduleResolution": "node",
+        "esModuleInterop": true,
+        "skipLibCheck": true
     },
     "include": [
         "src/**/*.ts"
