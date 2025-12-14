@@ -197,6 +197,105 @@ var __async = (__this, __arguments, generator) => {
         isImporting = false;
       }
     }
+    if (msg.type === "build-components") {
+      if (isImporting) {
+        sendError("Import in progress", "Please wait for the current import to complete.");
+        return;
+      }
+      isImporting = true;
+      try {
+        const { components, metadata } = msg.data;
+        warnings = [];
+        errors = [];
+        if (!components || components.length === 0) {
+          sendError("No components to import", "No component data was provided.");
+          return;
+        }
+        totalNodes = components.reduce((sum, c) => sum + countNodes(c.tree), 0);
+        processedNodes = 0;
+        imageCache.clear();
+        sendProgress("Loading fonts", 10, "", "Preparing fonts...");
+        for (const component of components) {
+          yield loadFonts(component.tree);
+        }
+        sendProgress("Loading fonts", 20, "", "Fonts ready");
+        const allUrls = /* @__PURE__ */ new Set();
+        for (const component of components) {
+          extractImageUrls(component.tree, allUrls);
+        }
+        if (allUrls.size > 0) {
+          sendProgress("Loading images", 25, `0/${allUrls.size} images`, "Downloading images...");
+          for (const component of components) {
+            yield preloadImages(component.tree);
+          }
+          const loadedCount = Array.from(imageCache.values()).filter((v) => v !== null).length;
+          if (loadedCount < allUrls.size) {
+            sendWarning(`${allUrls.size - loadedCount} of ${allUrls.size} images could not be loaded`);
+          }
+          sendProgress("Loading images", 40, `${loadedCount}/${allUrls.size} loaded`, "Images ready");
+        }
+        sendProgress("Building components", 45, `0/${components.length}`, "Creating Figma layers...");
+        const builtNodes = [];
+        const GRID_GAP = 40;
+        const COMPONENTS_PER_ROW = 3;
+        let currentX = 0;
+        let currentY = 0;
+        let maxHeightInRow = 0;
+        for (let i = 0; i < components.length; i++) {
+          const component = components[i];
+          sendProgress("Building components", 45 + Math.round(i / components.length * 50), `${i + 1}/${components.length}`, `Building ${component.name}`);
+          try {
+            const node = yield buildNode(component.tree, figma.currentPage, void 0);
+            if (node) {
+              const frameName = component.variant ? `${component.name} / ${component.variant}` : component.name;
+              node.name = frameName;
+              node.x = currentX;
+              node.y = currentY;
+              maxHeightInRow = Math.max(maxHeightInRow, node.height);
+              const colIndex = (i + 1) % COMPONENTS_PER_ROW;
+              if (colIndex === 0) {
+                currentX = 0;
+                currentY += maxHeightInRow + GRID_GAP;
+                maxHeightInRow = 0;
+              } else {
+                currentX += node.width + GRID_GAP;
+              }
+              builtNodes.push(node);
+            }
+          } catch (err) {
+            console.warn(`Failed to build component ${component.name}:`, err);
+            sendWarning(`Failed to build component: ${component.name}`);
+          }
+        }
+        if (builtNodes.length > 0) {
+          figma.currentPage.selection = builtNodes;
+          figma.viewport.scrollAndZoomIntoView(builtNodes);
+        }
+        const summary = {
+          type: "done",
+          mode: "component-docs",
+          stats: {
+            totalNodes: processedNodes,
+            totalComponents: builtNodes.length,
+            imagesLoaded: Array.from(imageCache.values()).filter((v) => v !== null).length,
+            totalImages: imageCache.size
+          },
+          metadata
+        };
+        if (warnings.length > 0) {
+          summary.warnings = warnings;
+        }
+        figma.ui.postMessage(summary);
+      } catch (error) {
+        console.error("Component build error:", error);
+        sendError(
+          "Failed to build components",
+          error.message || error.toString()
+        );
+      } finally {
+        isImporting = false;
+      }
+    }
   });
   const loadedFonts = /* @__PURE__ */ new Set();
   const FALLBACK_FONT = { family: "Inter", style: "Regular" };

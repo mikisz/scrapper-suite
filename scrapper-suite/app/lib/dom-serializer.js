@@ -8,6 +8,42 @@
 
 window.FigmaSerializer = {};
 
+/**
+ * Serialize a specific element (for component extraction)
+ * This captures the element with proper bounds relative to itself
+ */
+window.FigmaSerializer.serializeElement = function (element, options = {}) {
+    const { name, variant } = options;
+    const result = window.FigmaSerializer.serialize(element);
+
+    if (result) {
+        // Add component metadata
+        result.componentName = name || null;
+        result.componentVariant = variant || null;
+
+        // Recalculate bounds relative to the element itself
+        const rect = element.getBoundingClientRect();
+        result.componentBounds = {
+            x: rect.x + window.scrollX,
+            y: rect.y + window.scrollY,
+            width: rect.width,
+            height: rect.height,
+        };
+
+        // Reset globalBounds to be relative to component origin
+        if (result.globalBounds) {
+            result.globalBounds = {
+                x: 0,
+                y: 0,
+                width: rect.width,
+                height: rect.height,
+            };
+        }
+    }
+
+    return result;
+};
+
 window.FigmaSerializer.serialize = function (rootNode = document.body) {
 
     function getRgb(color) {
