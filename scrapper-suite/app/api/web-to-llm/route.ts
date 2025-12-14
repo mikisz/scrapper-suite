@@ -9,7 +9,7 @@ import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { URL } from 'url';
 import { validateScrapingUrl } from '@/app/lib/validation';
-import { dismissCookieModals } from '@/app/lib/cookie-dismissal';
+import { dismissCookieModals, hasCookieModal } from '@/app/lib/cookie-dismissal';
 import { crawlWebsite, buildLinkGraph, type CrawlResult } from '@/app/lib/crawler';
 import { urlToFilePath, normalizeUrl } from '@/app/lib/url-normalizer';
 
@@ -359,8 +359,11 @@ export async function POST(request: Request) {
                 const dismissResult = await dismissCookieModals(page);
                 if (dismissResult.dismissed) {
                     console.log(`Cookie modal dismissed via ${dismissResult.method}: ${dismissResult.selector}`);
-                    // Wait for modal to close and content to be visible
-                    await new Promise(r => setTimeout(r, 500));
+                    // Wait for modal to close by polling for its absence
+                    for (let i = 0; i < 10; i++) {
+                        if (!(await hasCookieModal(page))) break;
+                        await new Promise(r => setTimeout(r, 100));
+                    }
                 }
             }
 

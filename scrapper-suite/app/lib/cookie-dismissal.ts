@@ -178,8 +178,8 @@ async function tryKnownSelectors(page: Page): Promise<DismissResult> {
 
                 if (isVisible) {
                     await button.click();
-                    // Small delay to let the modal close
-                    await new Promise(r => setTimeout(r, 300));
+                    // Wait for modal to disappear by polling
+                    await waitForModalToClose(page);
                     return {
                         dismissed: true,
                         method: 'selector',
@@ -243,7 +243,8 @@ async function tryTextBasedButtons(page: Page): Promise<DismissResult> {
         }, COOKIE_BUTTON_TEXT_PATTERNS.map(p => p.toString()));
 
         if (result.found) {
-            await new Promise(r => setTimeout(r, 300));
+            // Wait for modal to disappear by polling
+            await waitForModalToClose(page);
             return {
                 dismissed: true,
                 method: 'text',
@@ -334,7 +335,8 @@ async function tryShadowDomButtons(page: Page): Promise<DismissResult> {
         }, COOKIE_BUTTON_SELECTORS, COOKIE_BUTTON_TEXT_PATTERNS.map(p => p.toString()));
 
         if (result.found) {
-            await new Promise(r => setTimeout(r, 300));
+            // Wait for modal to disappear by polling
+            await waitForModalToClose(page);
             return {
                 dismissed: true,
                 method: result.method,
@@ -373,5 +375,17 @@ export async function hasCookieModal(page: Page): Promise<boolean> {
         }, MODAL_CONTAINER_SELECTORS);
     } catch {
         return false;
+    }
+}
+
+/**
+ * Wait for cookie modal to close by polling
+ */
+async function waitForModalToClose(page: Page, maxAttempts: number = 10, intervalMs: number = 100): Promise<void> {
+    for (let i = 0; i < maxAttempts; i++) {
+        if (!(await hasCookieModal(page))) {
+            return;
+        }
+        await new Promise(r => setTimeout(r, intervalMs));
     }
 }
