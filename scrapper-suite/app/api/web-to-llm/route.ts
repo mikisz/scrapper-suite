@@ -13,6 +13,7 @@ import { validateScrapingUrl } from '@/app/lib/validation';
 import { dismissCookieModals, hasCookieModal } from '@/app/lib/cookie-dismissal';
 import { crawlWebsite, buildLinkGraph } from '@/app/lib/crawler';
 import { normalizeUrl } from '@/app/lib/url-normalizer';
+import { logger } from '@/app/lib/logger';
 
 async function downloadImage(url: string, filepath: string) {
     try {
@@ -100,7 +101,7 @@ async function processPageContent(
                 img.removeAttribute('srcset');
                 imageCount++;
             } catch (e) {
-                console.error(`Failed to download ${src}:`, e);
+                logger.error(`Failed to download ${src}`, e);
             }
         }
     }
@@ -257,7 +258,7 @@ export async function POST(request: Request) {
             // ============== CRAWL MODE ==============
             await fs.ensureDir(pagesDir);
 
-            console.log(`Starting crawl of ${url} (max ${maxPages} pages)`);
+            logger.info(`Starting crawl of ${url} (max ${maxPages} pages)`);
 
             const crawlResult = await crawlWebsite(page, {
                 maxPages,
@@ -266,10 +267,10 @@ export async function POST(request: Request) {
                 delayBetweenRequests: 500,
                 timeout: 30000
             }, (progress) => {
-                console.log(`Crawling [${progress.processed}/${progress.total}]: ${progress.currentUrl}`);
+                logger.info('Crawling progress', { processed: progress.processed, total: progress.total, currentUrl: progress.currentUrl });
             });
 
-            console.log(`Crawl complete: ${crawlResult.successfulPages} pages, ${crawlResult.failedPages} errors`);
+            logger.info(`Crawl complete: ${crawlResult.successfulPages} pages, ${crawlResult.failedPages} errors`);
 
             // Process each successful page
             const processedPages: ProcessedPage[] = [];
@@ -277,7 +278,7 @@ export async function POST(request: Request) {
 
             for (const result of crawlResult.results) {
                 if (result.error) {
-                    console.log(`Skipping failed page: ${result.url}`);
+                    logger.info(`Skipping failed page: ${result.url}`);
                     continue;
                 }
 
@@ -344,14 +345,14 @@ export async function POST(request: Request) {
 
         } else {
             // ============== SINGLE PAGE MODE ==============
-            console.log(`Navigating to ${url}`);
+            logger.info(`Navigating to ${url}`);
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
             // Dismiss cookie modals if enabled
             if (dismissCookies) {
                 const dismissResult = await dismissCookieModals(page);
                 if (dismissResult.dismissed) {
-                    console.log(`Cookie modal dismissed via ${dismissResult.method}: ${dismissResult.selector}`);
+                    logger.info('Cookie modal dismissed', { method: dismissResult.method, selector: dismissResult.selector });
                     // Wait for modal to close by polling for its absence
                     for (let i = 0; i < 10; i++) {
                         if (!(await hasCookieModal(page))) break;
@@ -407,7 +408,7 @@ export async function POST(request: Request) {
 
     } catch (error) {
         const errorInstance = error instanceof Error ? error : new Error(String(error));
-        console.error('LLM Scraper error:', errorInstance);
+        logger.error('LLM Scraper error', errorInstance);
         if (browser) await browserPool.release(browser);
 
         // Clean up any partial files
