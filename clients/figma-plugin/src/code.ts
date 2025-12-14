@@ -256,6 +256,159 @@ figma.ui.onmessage = async (msg) => {
             isImporting = false;
         }
     }
+
+    // COMPONENT-DOCS MODE: Build multiple components
+    if (msg.type === 'build-components') {
+        if (isImporting) {
+            sendError('Import in progress', 'Please wait for the current import to complete.');
+            return;
+        }
+
+        isImporting = true;
+
+        try {
+            const { components, metadata } = msg.data as {
+                components: Array<{
+                    name: string;
+                    variant?: string;
+                    tree: any;
+                    bounds: { x: number; y: number; width: number; height: number };
+                }>;
+                metadata: {
+                    pageTitle: string;
+                    libraryDetected: string | null;
+                    totalComponentsFound: number;
+                    themeApplied: string;
+                };
+            };
+
+            // Reset state
+            warnings = [];
+            errors = [];
+
+            if (!components || components.length === 0) {
+                sendError('No components to import', 'No component data was provided.');
+                return;
+            }
+
+            // Count total nodes across all components
+            totalNodes = components.reduce((sum, c) => sum + countNodes(c.tree), 0);
+            processedNodes = 0;
+
+            // Clear cache
+            imageCache.clear();
+
+            // Step 1: Load fonts from all components
+            sendProgress('Loading fonts', 10, '', 'Preparing fonts...');
+            for (const component of components) {
+                await loadFonts(component.tree);
+            }
+            sendProgress('Loading fonts', 20, '', 'Fonts ready');
+
+            // Step 2: Preload all images from all components
+            const allUrls = new Set<string>();
+            for (const component of components) {
+                extractImageUrls(component.tree, allUrls);
+            }
+
+            if (allUrls.size > 0) {
+                sendProgress('Loading images', 25, `0/${allUrls.size} images`, 'Downloading images...');
+                for (const component of components) {
+                    await preloadImages(component.tree);
+                }
+                const loadedCount = Array.from(imageCache.values()).filter(v => v !== null).length;
+                if (loadedCount < allUrls.size) {
+                    sendWarning(`${allUrls.size - loadedCount} of ${allUrls.size} images could not be loaded`);
+                }
+                sendProgress('Loading images', 40, `${loadedCount}/${allUrls.size} loaded`, 'Images ready');
+            }
+
+            // Step 3: Build each component in a grid layout
+            sendProgress('Building components', 45, `0/${components.length}`, 'Creating Figma layers...');
+
+            const builtNodes: SceneNode[] = [];
+            const GRID_GAP = 40;
+            const COMPONENTS_PER_ROW = 3;
+            let currentX = 0;
+            let currentY = 0;
+            let maxHeightInRow = 0;
+
+            for (let i = 0; i < components.length; i++) {
+                const component = components[i];
+
+                sendProgress('Building components', 45 + Math.round((i / components.length) * 50), `${i + 1}/${components.length}`, `Building ${component.name}`);
+
+                try {
+                    const node = await buildNode(component.tree, figma.currentPage, undefined);
+
+                    if (node) {
+                        // Generate frame name
+                        const frameName = component.variant
+                            ? `${component.name} / ${component.variant}`
+                            : component.name;
+                        node.name = frameName;
+
+                        // Position in grid
+                        node.x = currentX;
+                        node.y = currentY;
+
+                        // Track max height for row spacing
+                        maxHeightInRow = Math.max(maxHeightInRow, node.height);
+
+                        // Move to next grid position
+                        const colIndex = (i + 1) % COMPONENTS_PER_ROW;
+                        if (colIndex === 0) {
+                            // New row
+                            currentX = 0;
+                            currentY += maxHeightInRow + GRID_GAP;
+                            maxHeightInRow = 0;
+                        } else {
+                            currentX += node.width + GRID_GAP;
+                        }
+
+                        builtNodes.push(node);
+                    }
+                } catch (err: any) {
+                    console.warn(`Failed to build component ${component.name}:`, err);
+                    sendWarning(`Failed to build component: ${component.name}`);
+                }
+            }
+
+            // Select all imported components
+            if (builtNodes.length > 0) {
+                figma.currentPage.selection = builtNodes;
+                figma.viewport.scrollAndZoomIntoView(builtNodes);
+            }
+
+            // Send completion
+            const summary: any = {
+                type: 'done',
+                mode: 'component-docs',
+                stats: {
+                    totalNodes: processedNodes,
+                    totalComponents: builtNodes.length,
+                    imagesLoaded: Array.from(imageCache.values()).filter(v => v !== null).length,
+                    totalImages: imageCache.size,
+                },
+                metadata,
+            };
+
+            if (warnings.length > 0) {
+                summary.warnings = warnings;
+            }
+
+            figma.ui.postMessage(summary);
+
+        } catch (error: any) {
+            console.error('Component build error:', error);
+            sendError(
+                'Failed to build components',
+                error.message || error.toString()
+            );
+        } finally {
+            isImporting = false;
+        }
+    }
 };
 
 // Font loading with dynamic fallback
