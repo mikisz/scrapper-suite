@@ -3,26 +3,16 @@ import { browserPool } from '../../lib/browser-pool';
 import { zipDirectory } from '../../lib/archive';
 import { autoScroll } from '../../lib/puppeteer-utils';
 import { logger } from '@/app/lib/logger';
+import { applyRateLimit, RATE_LIMITS } from '@/app/lib/rate-limiter';
+import { downloadImage } from '@/app/lib/download-utils';
 import fs from 'fs-extra';
 import path from 'path';
-import https from 'https';
-
-function downloadImage(url: string, filepath: string) {
-    return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(filepath);
-        https.get(url, (response) => {
-            response.pipe(file);
-            file.on('finish', () => {
-                file.close(resolve);
-            });
-        }).on('error', (err) => {
-            fs.unlink(filepath);
-            reject(err);
-        });
-    });
-}
 
 export async function GET(request: Request) {
+    // Apply rate limiting
+    const rateLimitResponse = applyRateLimit(request, 'dribbble', RATE_LIMITS.scraping);
+    if (rateLimitResponse) return rateLimitResponse;
+
     const { searchParams } = new URL(request.url);
     const username = searchParams.get('username');
 

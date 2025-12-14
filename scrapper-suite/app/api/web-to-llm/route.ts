@@ -14,20 +14,8 @@ import { dismissCookieModals, hasCookieModal } from '@/app/lib/cookie-dismissal'
 import { crawlWebsite, buildLinkGraph } from '@/app/lib/crawler';
 import { normalizeUrl } from '@/app/lib/url-normalizer';
 import { logger } from '@/app/lib/logger';
-
-async function downloadImage(url: string, filepath: string) {
-    try {
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ScrapperSuite/1.0)' }
-        });
-        if (!response.ok) throw new Error(`Status ${response.status}`);
-
-        const buffer = await response.arrayBuffer();
-        await fs.writeFile(filepath, Buffer.from(buffer));
-    } catch (error) {
-        throw error;
-    }
-}
+import { applyRateLimit, RATE_LIMITS } from '@/app/lib/rate-limiter';
+import { downloadImage } from '@/app/lib/download-utils';
 
 interface ProcessedPage {
     filePath: string;
@@ -194,6 +182,10 @@ function generateMetadata(
 }
 
 export async function POST(request: Request) {
+    // Apply rate limiting
+    const rateLimitResponse = applyRateLimit(request, 'web-to-llm', RATE_LIMITS.scraping);
+    if (rateLimitResponse) return rateLimitResponse;
+
     let browser = null;
     const jobId = Date.now().toString();
     const jobDir = path.join(process.cwd(), 'downloads', `llm_${jobId}`);

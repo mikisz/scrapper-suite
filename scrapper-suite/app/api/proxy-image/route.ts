@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateImageUrl } from '@/app/lib/validation';
 import { logger } from '@/app/lib/logger';
+import { applyRateLimit, RATE_LIMITS } from '@/app/lib/rate-limiter';
 import sharp from 'sharp';
 
 export const dynamic = 'force-dynamic'; // Prevent static caching
@@ -13,6 +14,10 @@ const FETCH_TIMEOUT_MS = 10000; // 10 seconds
 const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
 export async function GET(request: NextRequest) {
+    // Apply rate limiting (higher limit for proxy endpoint)
+    const rateLimitResponse = applyRateLimit(request, 'proxy-image', RATE_LIMITS.proxy);
+    if (rateLimitResponse) return rateLimitResponse;
+
     const searchParams = request.nextUrl.searchParams;
     const url = searchParams.get('url');
 

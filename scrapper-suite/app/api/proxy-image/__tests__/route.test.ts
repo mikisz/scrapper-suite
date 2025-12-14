@@ -5,6 +5,16 @@
 import { GET } from '../route';
 import { NextRequest } from 'next/server';
 
+// Mock rate limiter to bypass rate limiting in tests
+jest.mock('../../../lib/rate-limiter', () => ({
+  applyRateLimit: jest.fn(() => null),
+  RATE_LIMITS: {
+    scraping: { maxRequests: 10, windowMs: 60000 },
+    proxy: { maxRequests: 100, windowMs: 60000 },
+    health: { maxRequests: 60, windowMs: 60000 },
+  },
+}));
+
 // Mock fetch
 const mockFetch = jest.fn();
 global.fetch = mockFetch;

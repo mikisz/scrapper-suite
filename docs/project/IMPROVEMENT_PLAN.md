@@ -132,26 +132,19 @@ coverageThreshold: {
 - Safe SVG handling in Figma plugin
 - Containerized with non-root user
 
-### 4.2 Gaps to Address
+### 4.2 Gaps to Address ✅ MOSTLY RESOLVED
 
-| Issue | File | Recommendation |
-|-------|------|----------------|
-| No rate limiting | API routes | Add express-rate-limit or similar |
-| Verbose error logging | `web-to-llm/route.ts:401` | Sanitize error messages in production |
-| Image size unlimited | `downloadImage()` | Add Content-Length check |
-| Missing security headers | `next.config.ts` | Add OWASP security headers |
+| Issue | File | Status |
+|-------|------|--------|
+| No rate limiting | API routes | ✅ Added `rate-limiter.ts` with per-endpoint limits |
+| Image size unlimited | `downloadImage()` | ✅ Added 10MB limit + timeout (10s) |
+| Missing security headers | `next.config.ts` | ✅ Already implemented |
+| Verbose error logging | `web-to-llm/route.ts` | Sanitized in user-facing responses |
 
-**Security Headers (add to next.config.ts):**
-```typescript
-headers: async () => [{
-  source: '/(.*)',
-  headers: [
-    { key: 'X-Content-Type-Options', value: 'nosniff' },
-    { key: 'X-Frame-Options', value: 'DENY' },
-    { key: 'X-XSS-Protection', value: '1; mode=block' },
-  ],
-}],
-```
+**Rate Limiting Configuration:**
+- Scraping endpoints: 10 requests/minute per IP
+- Proxy endpoint: 100 requests/minute per IP
+- Health endpoint: 60 requests/minute per IP
 
 ---
 
@@ -162,14 +155,14 @@ headers: async () => [{
 - Getting started guide exists (`docs/guides/how-to-run.md`)
 - Good JSDoc in library files
 
-### Missing Documentation
+### Documentation Status
 
-| Document | Purpose |
-|----------|---------|
-| `docs/API.md` | Request/response schemas for all endpoints |
-| `docs/TROUBLESHOOTING.md` | Common issues and solutions |
-| `scrapper-suite/README.md` | Replace generic Next.js template |
-| `clients/figma-plugin/README.md` | Plugin installation & usage |
+| Document | Purpose | Status |
+|----------|---------|--------|
+| `docs/API.md` | Request/response schemas for all endpoints | ✅ Created |
+| `scrapper-suite/README.md` | Backend overview and setup | ✅ Updated |
+| `clients/figma-plugin/README.md` | Plugin installation & usage | ✅ Created |
+| `docs/TROUBLESHOOTING.md` | Common issues and solutions | Pending |
 
 ---
 
@@ -255,10 +248,11 @@ clients/figma-plugin/src/
 - [x] Replace console.log with logger utility
 - [ ] Split large files into modules (REMAINING - lower priority)
 
-### Phase 5: Documentation (REMAINING)
-- [ ] Create API.md with endpoint documentation
-- [ ] Update scrapper-suite/README.md
-- [ ] Create TROUBLESHOOTING.md
+### Phase 5: Documentation ✅ MOSTLY COMPLETE
+- [x] Create API.md with endpoint documentation
+- [x] Update scrapper-suite/README.md
+- [x] Create clients/figma-plugin/README.md
+- [ ] Create TROUBLESHOOTING.md (optional)
 
 ---
 
@@ -271,9 +265,11 @@ clients/figma-plugin/src/
 
 ## 10. Next Priority Items
 
-1. **Create API.md** - Document all endpoints with schemas
-2. **Add rate limiting** - Security improvement for API routes
-3. **Split large files** - `code.ts` into modules (lower priority)
+1. ~~**Create API.md**~~ ✅ Done - Comprehensive endpoint documentation
+2. ~~**Add rate limiting**~~ ✅ Done - Per-endpoint limits with `rate-limiter.ts`
+3. ~~**Image size limits**~~ ✅ Done - 10MB limit with timeout
+4. **Split large files** - `code.ts` into modules (lower priority)
+5. **Create TROUBLESHOOTING.md** - Common issues and solutions (optional)
 
 ---
 
