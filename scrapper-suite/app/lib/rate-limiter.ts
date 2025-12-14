@@ -62,6 +62,9 @@ export const RATE_LIMITS = {
 
 /**
  * Extract client IP from request headers
+ *
+ * Note: In production, ensure your reverse proxy (nginx, cloudflare, etc.)
+ * is configured to set x-forwarded-for or x-real-ip headers.
  */
 export function getClientIp(request: Request): string {
     // Check common proxy headers
@@ -76,8 +79,15 @@ export function getClientIp(request: Request): string {
         return realIp;
     }
 
-    // Fallback - won't work in production but handles local dev
-    return 'unknown';
+    // Check CF-Connecting-IP (Cloudflare)
+    const cfIp = request.headers.get('cf-connecting-ip');
+    if (cfIp) {
+        return cfIp;
+    }
+
+    // Fallback for local development - uses a unique-ish identifier
+    // In production, the reverse proxy should always set IP headers
+    return 'local-dev';
 }
 
 /**

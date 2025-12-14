@@ -51,6 +51,27 @@ describe('rate-limiter', () => {
             expect(resultA.limited).toBe(true);
             expect(resultB.limited).toBe(false);
         });
+
+        it('should reset limit after windowMs', () => {
+            jest.useFakeTimers();
+            const identifier = 'test-ip-timer';
+            const config = { maxRequests: 1, windowMs: 60000 };
+
+            // First request, should be allowed
+            checkRateLimit(identifier, config);
+            const result1 = checkRateLimit(identifier, config);
+            expect(result1.limited).toBe(true);
+
+            // Advance time by windowMs
+            jest.advanceTimersByTime(60001);
+
+            // Request after window expired, should be allowed again
+            const result2 = checkRateLimit(identifier, config);
+            expect(result2.limited).toBe(false);
+            expect(result2.remaining).toBe(0);
+
+            jest.useRealTimers();
+        });
     });
 
     describe('getClientIp', () => {
@@ -70,10 +91,18 @@ describe('rate-limiter', () => {
             expect(getClientIp(request)).toBe('10.0.0.1');
         });
 
-        it('should return unknown when no IP headers present', () => {
+        it('should extract IP from cf-connecting-ip header (Cloudflare)', () => {
+            const request = new Request('http://localhost', {
+                headers: { 'cf-connecting-ip': '203.0.113.50' },
+            });
+
+            expect(getClientIp(request)).toBe('203.0.113.50');
+        });
+
+        it('should return local-dev when no IP headers present', () => {
             const request = new Request('http://localhost');
 
-            expect(getClientIp(request)).toBe('unknown');
+            expect(getClientIp(request)).toBe('local-dev');
         });
     });
 

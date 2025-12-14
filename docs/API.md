@@ -402,7 +402,20 @@ All error responses follow this structure:
 
 ## Rate Limits
 
-Currently no rate limiting is implemented. See [IMPROVEMENT_PLAN.md](project/IMPROVEMENT_PLAN.md) for planned security improvements.
+API endpoints are rate-limited by IP address to prevent abuse. The limits are as follows:
+
+| Endpoint Group | Limit |
+|----------------|-------|
+| Scraping (`/website-to-figma`, `/web-to-llm`, `/web-to-png`, `/dribbble`) | 10 requests per minute |
+| Image Proxy (`/proxy-image`) | 100 requests per minute |
+| Health Check (`/health`) | 60 requests per minute |
+
+If you exceed the rate limit, you will receive a `429 Too Many Requests` response. The response headers will indicate when you can retry:
+
+- `Retry-After`: Seconds to wait before making another request.
+- `X-RateLimit-Limit`: The maximum number of requests allowed in the window.
+- `X-RateLimit-Remaining`: The number of requests remaining in the current window.
+- `X-RateLimit-Reset`: A Unix timestamp indicating when the rate limit window resets.
 
 ---
 

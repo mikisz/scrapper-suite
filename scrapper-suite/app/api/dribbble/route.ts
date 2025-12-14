@@ -4,45 +4,9 @@ import { zipDirectory } from '../../lib/archive';
 import { autoScroll } from '../../lib/puppeteer-utils';
 import { logger } from '@/app/lib/logger';
 import { applyRateLimit, RATE_LIMITS } from '@/app/lib/rate-limiter';
+import { downloadImage } from '@/app/lib/download-utils';
 import fs from 'fs-extra';
 import path from 'path';
-
-// Safety limits
-const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
-const FETCH_TIMEOUT_MS = 10000; // 10 seconds
-
-async function downloadImage(url: string, filepath: string): Promise<void> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    try {
-        const response = await fetch(url, {
-            signal: controller.signal,
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ScrapperSuite/1.0)' }
-        });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) throw new Error(`Status ${response.status}`);
-
-        // Check content-length early to reject oversized images
-        const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
-        if (contentLength > MAX_IMAGE_SIZE_BYTES) {
-            throw new Error('Image too large (max 10MB)');
-        }
-
-        const buffer = await response.arrayBuffer();
-
-        // Double-check size after download
-        if (buffer.byteLength > MAX_IMAGE_SIZE_BYTES) {
-            throw new Error('Image too large (max 10MB)');
-        }
-
-        await fs.writeFile(filepath, Buffer.from(buffer));
-    } catch (error) {
-        clearTimeout(timeoutId);
-        throw error;
-    }
-}
 
 export async function GET(request: Request) {
     // Apply rate limiting
