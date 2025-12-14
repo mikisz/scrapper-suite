@@ -273,12 +273,16 @@ export async function POST(request: Request) {
                         );
 
                         if (componentTree) {
-                            return {
+                            const extractedVariant = variant?.variant || detected.variant;
+                            const result: ExtractedComponent = {
                                 name: variant?.name || detected.name,
-                                variant: variant?.variant || detected.variant,
                                 tree: componentTree,
                                 bounds: detected.bounds,
                             };
+                            if (extractedVariant) {
+                                result.variant = extractedVariant;
+                            }
+                            return result;
                         }
                     } catch (e) {
                         console.warn(`Failed to serialize component: ${detected.selector}`, e);
