@@ -397,8 +397,9 @@ export async function POST(request: Request) {
             },
         });
 
-    } catch (error: any) {
-        console.error('LLM Scraper error:', error);
+    } catch (error) {
+        const errorInstance = error instanceof Error ? error : new Error(String(error));
+        console.error('LLM Scraper error:', errorInstance);
         if (browser) await browserPool.release(browser);
 
         // Clean up any partial files
@@ -410,7 +411,7 @@ export async function POST(request: Request) {
         }
 
         // User-friendly error messages
-        const errorMessage = error.message || '';
+        const errorMessage = errorInstance.message || '';
         let userError = 'Processing failed';
         let suggestion = 'Please try again or use a different URL.';
 

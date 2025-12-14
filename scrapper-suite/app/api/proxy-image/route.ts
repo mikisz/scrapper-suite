@@ -97,11 +97,11 @@ export async function GET(request: NextRequest) {
                 'Cache-Control': 'public, max-age=31536000, immutable',
             },
         });
-    } catch (error: any) {
+    } catch (error) {
         clearTimeout(timeoutId);
 
         // Handle timeout/abort errors specifically
-        if (error.name === 'AbortError') {
+        if (error instanceof Error && error.name === 'AbortError') {
             return NextResponse.json({ error: 'Image fetch timed out' }, { status: 504 });
         }
 

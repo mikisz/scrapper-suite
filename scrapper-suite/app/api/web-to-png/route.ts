@@ -9,21 +9,22 @@ import { URL } from 'url';
 
 const MAX_PAGES_RECURSIVE = 20;
 
-async function captureAndSave(page: any, url: string, downloadDir: string, index: number) {
+async function captureAndSave(page: import('puppeteer').Page, url: string, downloadDir: string, index: number) {
     try {
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
         const cleanUrl = url.split('?')[0]; // simple cleanup
         const filename = sanitizeScreenshotFilename(cleanUrl, index);
         await page.screenshot({ path: path.join(downloadDir, filename), fullPage: true });
         return true;
-    } catch (e: any) {
-        console.error(`Failed to capture ${url}: ${e.message}`);
+    } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(`Failed to capture ${url}: ${message}`);
         return false;
     }
 }
 
 // Extract internal links from the current page
-async function getInternalLinks(page: any, baseUrl: string): Promise<string[]> {
+async function getInternalLinks(page: import('puppeteer').Page, baseUrl: string): Promise<string[]> {
     return await page.evaluate((baseUrl: string) => {
         const links = Array.from(document.querySelectorAll('a'));
         return links
@@ -107,9 +108,10 @@ export async function POST(request: Request) {
             },
         });
 
-    } catch (error: any) {
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Scraping error:', error);
         if (browser) await browserPool.release(browser);
-        return NextResponse.json({ error: error.message || 'Scraping failed' }, { status: 500 });
+        return NextResponse.json({ error: message || 'Scraping failed' }, { status: 500 });
     }
 }

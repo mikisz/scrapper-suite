@@ -143,11 +143,11 @@ export async function dismissCookieModals(
                 await new Promise(r => setTimeout(r, retryDelay));
             }
 
-        } catch (error: any) {
+        } catch (error) {
             if (attempt === retryCount) {
                 return {
                     dismissed: false,
-                    error: error.message
+                    error: error instanceof Error ? error.message : String(error)
                 };
             }
         }

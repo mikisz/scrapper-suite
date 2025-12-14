@@ -1,6 +1,27 @@
+# Dependencies
 node_modules
+
+# Build outputs
+.next
+dist
 downloads
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS files
 .DS_Store
+
+# Generated files
 *.zip
 *.log
 debug_shot*
+
+# Editor directories
+.idea
+.vscode
+
+# Test coverage
+coverage
