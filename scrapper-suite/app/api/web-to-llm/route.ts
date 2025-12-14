@@ -267,7 +267,7 @@ export async function POST(request: Request) {
                 delayBetweenRequests: 500,
                 timeout: 30000
             }, (progress) => {
-                logger.info(`Crawling [${progress.processed}/${progress.total}]: ${progress.currentUrl}`);
+                logger.info('Crawling progress', { processed: progress.processed, total: progress.total, currentUrl: progress.currentUrl });
             });
 
             logger.info(`Crawl complete: ${crawlResult.successfulPages} pages, ${crawlResult.failedPages} errors`);
@@ -352,7 +352,7 @@ export async function POST(request: Request) {
             if (dismissCookies) {
                 const dismissResult = await dismissCookieModals(page);
                 if (dismissResult.dismissed) {
-                    logger.info(`Cookie modal dismissed via ${dismissResult.method}: ${dismissResult.selector}`);
+                    logger.info('Cookie modal dismissed', { method: dismissResult.method, selector: dismissResult.selector });
                     // Wait for modal to close by polling for its absence
                     for (let i = 0; i < 10; i++) {
                         if (!(await hasCookieModal(page))) break;

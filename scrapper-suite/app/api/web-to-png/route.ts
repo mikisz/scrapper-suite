@@ -19,7 +19,7 @@ async function captureAndSave(page: import('puppeteer').Page, url: string, downl
         return true;
     } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        logger.error(`Failed to capture ${url}`, { error: message });
+        logger.error('Failed to capture screenshot', { url, error: message });
         return false;
     }
 }
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
                 if (visited.has(currentUrl)) continue;
 
                 visited.add(currentUrl);
-                logger.info(`Processing [${count + 1}/${MAX_PAGES_RECURSIVE}]: ${currentUrl}`);
+                logger.info('Processing recursive screenshot', { current: count + 1, total: MAX_PAGES_RECURSIVE, url: currentUrl });
 
                 const success = await captureAndSave(page, currentUrl, downloadDir, count + 1);
                 if (success) {

@@ -141,7 +141,7 @@ export async function crawlWebsite(
             if (dismissCookies && isFirstPage) {
                 const dismissResult = await dismissCookieModals(page);
                 if (dismissResult.dismissed) {
-                    logger.info(`Cookie modal dismissed via ${dismissResult.method}: ${dismissResult.selector}`);
+                    logger.info('Cookie modal dismissed', { method: dismissResult.method, selector: dismissResult.selector });
                     // Wait a bit for modal to close and content to be visible
                     await new Promise(r => setTimeout(r, 500));
                 }
@@ -175,7 +175,7 @@ export async function crawlWebsite(
         } catch (error) {
             errorCount++;
             const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error(`Failed to crawl ${currentUrl}`, { error: errorMessage });
+            logger.error('Failed to crawl page', { url: currentUrl, error: errorMessage });
 
             results.push({
                 url: currentUrl,

@@ -40,7 +40,7 @@ export async function GET(request: Request) {
         const page = await browser.newPage();
         await page.setViewport({ width: 1366, height: 768 });
 
-        logger.info(`Navigating to https://dribbble.com/${username}`);
+        logger.info('Navigating to Dribbble profile', { username });
         await page.goto(`https://dribbble.com/${username}`, { waitUntil: 'networkidle2', timeout: 60000 });
 
         // Check if user exists
@@ -89,7 +89,7 @@ export async function GET(request: Request) {
                 }
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
-                logger.error(`Failed to scrape shot ${link}`, { error: message });
+                logger.error('Failed to scrape shot', { link, error: message });
             }
         }
 
