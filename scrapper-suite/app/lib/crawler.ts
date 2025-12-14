@@ -9,7 +9,6 @@ import type { Page } from 'puppeteer';
 import { dismissCookieModals } from './cookie-dismissal';
 import {
     normalizeUrl,
-    isInternalLink,
     categorizeLinks,
     deduplicateUrls,
     urlToFilePath
@@ -217,7 +216,7 @@ export async function crawlWebsite(
  */
 async function extractPageData(
     page: Page,
-    currentUrl: string,
+    _currentUrl: string,
     baseUrl: string
 ): Promise<{
     title: string;
@@ -226,7 +225,7 @@ async function extractPageData(
     externalLinks: string[];
     images: string[];
 }> {
-    const data = await page.evaluate((baseUrl: string) => {
+    const data = await page.evaluate((_baseUrl: string) => {
         // Get title
         const title = document.title || '';
 

@@ -225,10 +225,9 @@ export function getRelativePath(fromUrl: string, toUrl: string): string {
 /**
  * Convert a URL to a safe filename/path for local storage
  */
-export function urlToFilePath(urlString: string, baseUrl: string): string {
+export function urlToFilePath(urlString: string, _baseUrl: string): string {
     try {
         const url = new URL(urlString);
-        const base = new URL(baseUrl);
 
         // Get pathname relative to base
         let pathname = url.pathname;

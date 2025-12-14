@@ -170,7 +170,7 @@ export async function POST(request: Request) {
 
             // Run the serialization
             const figmaTree = await page.evaluate(() => {
-                // @ts-ignore
+                // @ts-expect-error FigmaSerializer is injected by serializerCode
                 return window.FigmaSerializer.serialize(document.body);
             });
 

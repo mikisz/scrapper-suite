@@ -64,7 +64,7 @@ jest.mock('archiver', () => {
 
 // Mock JSDOM and Readability
 jest.mock('jsdom', () => ({
-  JSDOM: jest.fn().mockImplementation((html, options) => ({
+  JSDOM: jest.fn().mockImplementation(() => ({
     window: {
       document: {
         body: {
@@ -98,8 +98,10 @@ jest.mock('turndown', () => {
   }));
 });
 
-// Import after mocks
+// Import after mocks - require() needed here because imports are hoisted above jest.mock()
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const puppeteer = require('puppeteer-extra').default;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require('fs-extra');
 
 describe('POST /api/web-to-llm', () => {

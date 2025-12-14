@@ -48,7 +48,8 @@ jest.mock('fs', () => ({
   `),
 }));
 
-// Get mock reference
+// Get mock reference - require() needed here because imports are hoisted above jest.mock()
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const puppeteer = require('puppeteer-extra').default;
 
 describe('POST /api/website-to-figma', () => {

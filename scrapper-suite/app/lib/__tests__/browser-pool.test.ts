@@ -48,6 +48,7 @@ describe('BrowserPool', () => {
 
   describe('acquire()', () => {
     it('should launch a new browser when pool is empty', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const puppeteer = require('puppeteer-extra').default;
       
       const browser = await browserPool.acquire();
@@ -63,6 +64,7 @@ describe('BrowserPool', () => {
     });
 
     it('should return existing browser from pool when available', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const puppeteer = require('puppeteer-extra').default;
       
       // Acquire and release to add to pool

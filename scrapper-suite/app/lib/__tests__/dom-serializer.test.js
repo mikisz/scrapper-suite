@@ -13,8 +13,8 @@
  */
 
 // Load the serializer into jsdom's window
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 // Helper to mock getBoundingClientRect for all elements
 function mockLayoutEngine() {

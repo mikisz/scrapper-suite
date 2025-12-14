@@ -152,12 +152,20 @@ function generateSitemap(
 /**
  * Generate metadata JSON file
  */
+interface LinkGraphNode {
+    url: string;
+    title: string;
+    filePath: string;
+    outgoingLinks: string[];
+    incomingLinks: string[];
+}
+
 function generateMetadata(
     pages: ProcessedPage[],
     baseUrl: string,
     crawlDate: Date,
     duration: number,
-    linkGraph: Map<string, any>,
+    linkGraph: Map<string, LinkGraphNode>,
     format: 'markdown' | 'html'
 ): object {
     const ext = format === 'markdown' ? '.md' : '.html';

@@ -44,9 +44,10 @@ export default function DribbblePage() {
             setStatus('Done! Check your downloads.');
             setStatusColor('text-green-400');
 
-        } catch (error: any) {
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
             console.error(error);
-            setStatus(`Error: ${error.message}`);
+            setStatus(`Error: ${message}`);
             setStatusColor('text-red-400');
         } finally {
             setIsLoading(false);

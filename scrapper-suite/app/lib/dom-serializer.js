@@ -207,7 +207,7 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
         let computed;
         try {
             computed = window.getComputedStyle(el, pseudo);
-        } catch (e) {
+        } catch {
             return null; // Environment doesn't support pseudo-element styles
         }
         
@@ -528,7 +528,7 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                     if (useElements.length > 0) {
                         svgString = s.serializeToString(svgClone);
                     }
-                } catch (e) {
+                } catch {
                     // Continue with original string if resolution fails
                 }
                 

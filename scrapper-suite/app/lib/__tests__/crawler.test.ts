@@ -22,7 +22,7 @@ function createMockPage(pageData: {
 
     return {
         goto: jest.fn().mockResolvedValue(null),
-        evaluate: jest.fn().mockImplementation((fn: Function, ...args: unknown[]) => {
+        evaluate: jest.fn().mockImplementation((fn: (...fnArgs: unknown[]) => unknown) => {
             // Mock the extractPageData evaluate call
             if (typeof fn === 'function') {
                 return Promise.resolve({
