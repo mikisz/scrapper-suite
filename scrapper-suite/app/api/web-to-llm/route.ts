@@ -11,7 +11,7 @@ import { URL } from 'url';
 import { validateScrapingUrl } from '@/app/lib/validation';
 import { dismissCookieModals, hasCookieModal } from '@/app/lib/cookie-dismissal';
 import { crawlWebsite, buildLinkGraph, type CrawlResult } from '@/app/lib/crawler';
-import { urlToFilePath, normalizeUrl } from '@/app/lib/url-normalizer';
+import { normalizeUrl } from '@/app/lib/url-normalizer';
 
 async function downloadImage(url: string, filepath: string) {
     try {
@@ -66,6 +66,7 @@ interface ProcessedPage {
 
 /**
  * Process a single page's HTML content into markdown/html with images
+ * @param relativeImagePath - relative path from the page file to images dir (e.g., "../images" for nested pages)
  */
 async function processPageContent(
     html: string,
@@ -73,8 +74,9 @@ async function processPageContent(
     format: 'markdown' | 'html',
     cleanup: 'article' | 'full',
     imagesDir: string,
-    imagePrefix: string
-): Promise<{ content: string; imageCount: number }> {
+    imagePrefix: string,
+    relativeImagePath: string = 'images'
+): Promise<{ content: string; imageCount: number; textContent: string }> {
     // Process with JSDOM
     const dom = new JSDOM(html, { url: pageUrl });
     let document = dom.window.document;
@@ -121,7 +123,8 @@ async function processPageContent(
 
             try {
                 await downloadImage(src, localPath);
-                img.src = `images/${filename}`;
+                // Use the relative path from page to images directory
+                img.src = `${relativeImagePath}/${filename}`;
                 img.removeAttribute('srcset');
                 imageCount++;
             } catch (e) {
@@ -129,6 +132,9 @@ async function processPageContent(
             }
         }
     }
+
+    // Extract text content for accurate word count (before converting to final format)
+    const textContent = document.body.textContent || '';
 
     let finalContent = '';
     if (format === 'markdown') {
@@ -141,7 +147,7 @@ async function processPageContent(
         finalContent = document.body.innerHTML;
     }
 
-    return { content: finalContent, imageCount };
+    return { content: finalContent, imageCount, textContent };
 }
 
 /**
@@ -299,19 +305,26 @@ export async function POST(request: Request) {
                 const pageFileDir = path.join(pagesDir, path.dirname(filePath));
                 await fs.ensureDir(pageFileDir);
 
-                const { content, imageCount } = await processPageContent(
+                // Compute relative path from page file location to images directory
+                // Pages are in pages/<path>/, images are in images/
+                const fullPagePath = path.join(pagesDir, filePath);
+                const relativeImagePath = path.relative(path.dirname(fullPagePath), imagesDir).replace(/\\/g, '/') || 'images';
+
+                const { content, imageCount, textContent } = await processPageContent(
                     result.html,
                     result.url,
                     format,
                     cleanup,
                     imagesDir,
-                    filePath.replace(/\//g, '_')
+                    filePath.replace(/\//g, '_'),
+                    relativeImagePath
                 );
 
                 const fullPath = path.join(pagesDir, `${filePath}${ext}`);
                 await fs.writeFile(fullPath, content);
 
-                const wordCount = content.split(/\s+/).filter(Boolean).length;
+                // Use textContent for accurate word count (excludes HTML tags)
+                const wordCount = textContent.split(/\s+/).filter(Boolean).length;
 
                 processedPages.push({
                     filePath,
