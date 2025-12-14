@@ -61,8 +61,8 @@ describe('validateScrapingUrl', () => {
     });
 
     it('should reject null/undefined', () => {
-      expect(validateScrapingUrl(null as any).valid).toBe(false);
-      expect(validateScrapingUrl(undefined as any).valid).toBe(false);
+      expect(validateScrapingUrl(null as unknown as string).valid).toBe(false);
+      expect(validateScrapingUrl(undefined as unknown as string).valid).toBe(false);
     });
 
     it('should reject whitespace-only string', () => {

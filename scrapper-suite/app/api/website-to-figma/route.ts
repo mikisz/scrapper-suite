@@ -170,7 +170,7 @@ export async function POST(request: Request) {
 
             // Run the serialization
             const figmaTree = await page.evaluate(() => {
-                // @ts-ignore
+                // @ts-expect-error FigmaSerializer is injected by serializerCode
                 return window.FigmaSerializer.serialize(document.body);
             });
 
@@ -196,11 +196,12 @@ export async function POST(request: Request) {
             throw error;
         }
 
-    } catch (error: any) {
-        console.error('Scraping failed:', error);
+    } catch (error) {
+        const errorInstance = error instanceof Error ? error : new Error(String(error));
+        console.error('Scraping failed:', errorInstance);
         if (browser) await browserPool.release(browser);
-        
-        const friendlyError = getUserFriendlyError(error);
+
+        const friendlyError = getUserFriendlyError(errorInstance);
         return NextResponse.json(friendlyError, { status: 500 });
     }
 }
