@@ -132,15 +132,12 @@ describe('zipDirectory', () => {
         expect(extractedData).toEqual(binaryData);
     });
 
-    it('should create empty zip when source directory does not exist', async () => {
-        // Note: archiver doesn't throw for non-existent directories,
-        // it creates an empty archive. This test documents that behavior.
+    it('should throw error when source directory does not exist', async () => {
         const nonExistentDir = path.join(tempDir, 'non-existent');
 
-        await zipDirectory(nonExistentDir, outPath);
-
-        // Verify zip was created (even if empty)
-        expect(await fs.pathExists(outPath)).toBe(true);
+        await expect(zipDirectory(nonExistentDir, outPath)).rejects.toThrow(
+            'Source directory does not exist'
+        );
     });
 
     it('should handle files with special characters in names', async () => {

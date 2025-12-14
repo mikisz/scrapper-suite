@@ -389,83 +389,26 @@ async function createPseudoElementNode(data: VisualNode, s: any): Promise<SceneN
 
         return text;
     } else {
-        // Decorative, gradient, or image pseudo-element
-        const frame = figma.createFrame();
-        frame.name = `::${pseudoName.toLowerCase()}`;
+        // Decorative, gradient, or image pseudo-element - reuse createFrameNode for base styling
+        const pseudoData: VisualNode = { ...data, tag: `::${pseudoName.toLowerCase()}` };
+        const frame = createFrameNode(pseudoData, s);
 
-        const fills: Paint[] = [];
-        if (s.backgroundColor) {
-            const bgAlpha = s.backgroundColor.a !== undefined ? s.backgroundColor.a : 1;
-            const finalOpacity = bgAlpha * (s.opacity ?? 1);
-            fills.push({
-                type: 'SOLID',
-                color: { r: s.backgroundColor.r, g: s.backgroundColor.g, b: s.backgroundColor.b },
-                opacity: finalOpacity
-            });
-        }
-
-        // Handle content: url() images
+        // Handle content: url() images (pseudo-element specific)
         if (data.imageUrl) {
             const imgBytes = imageCache.get(data.imageUrl);
             if (imgBytes) {
                 try {
                     const imgHash = figma.createImage(imgBytes).hash;
-                    fills.push({ type: 'IMAGE', scaleMode: 'FILL', imageHash: imgHash });
+                    const currentFills = frame.fills as Paint[];
+                    frame.fills = [...currentFills, { type: 'IMAGE', scaleMode: 'FILL', imageHash: imgHash }];
                 } catch {
-                    fills.push({ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } });
+                    const currentFills = frame.fills as Paint[];
+                    frame.fills = [...currentFills, { type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } }];
                 }
             }
         }
-        // Handle background-image
-        else if (s.backgroundImage && s.backgroundImage.type === 'IMAGE') {
-            const bgBytes = imageCache.get(s.backgroundImage.url);
-            if (bgBytes) {
-                try {
-                    const bgHash = figma.createImage(bgBytes).hash;
-                    let scaleMode: 'FILL' | 'FIT' | 'CROP' | 'TILE' = 'FILL';
-                    const bgRepeat = s.backgroundRepeat || 'no-repeat';
 
-                    if (bgRepeat === 'repeat' || bgRepeat === 'repeat-x' || bgRepeat === 'repeat-y') {
-                        scaleMode = 'TILE';
-                    } else if (s.backgroundImage.size === 'contain') {
-                        scaleMode = 'FIT';
-                    }
-                    fills.push({ type: 'IMAGE', scaleMode, imageHash: bgHash });
-                } catch {
-                    fills.push({ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9 } });
-                }
-            }
-        } else if (s.backgroundImage && s.backgroundImage.type === 'GRADIENT') {
-            const gradient = parseGradient(s.backgroundImage.raw);
-            if (gradient) fills.push(gradient);
-        }
-
-        frame.fills = fills.length > 0 ? fills : [];
-
-        // Apply border radius
-        if (s.borderRadius) {
-            frame.topLeftRadius = s.borderRadius.topLeft || 0;
-            frame.topRightRadius = s.borderRadius.topRight || 0;
-            frame.bottomRightRadius = s.borderRadius.bottomRight || 0;
-            frame.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
-        }
-
-        // Apply shadows
-        if (s.boxShadow) {
-            frame.effects = parseBoxShadow(s.boxShadow);
-        }
-
-        // Apply borders
-        if (s.border && s.border.width > 0 && s.border.color) {
-            const borderRgb = toRGB(s.border.color);
-            if (borderRgb) {
-                frame.strokes = [{ type: 'SOLID', color: borderRgb, opacity: s.border.color.a ?? 1 }];
-                frame.strokeWeight = s.border.width;
-                frame.strokeAlign = 'INSIDE';
-            }
-        }
-
-        // Set default size for pseudo-elements
+        // Set default size for pseudo-elements without explicit dimensions
         if (s.width === 'auto' || !s.width || s.width === 0) {
             if (data.contentType === 'IMAGE' || data.contentType === 'GRADIENT') {
                 frame.resize(24, 24);

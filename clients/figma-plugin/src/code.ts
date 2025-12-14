@@ -108,11 +108,16 @@ figma.ui.onmessage = async (msg) => {
 };
 
 // =====================
-// Build Handlers
+// Build Orchestration
 // =====================
 
-async function handleBuild(rootData: VisualNode) {
-    // Prevent concurrent imports
+/**
+ * Higher-order function to orchestrate build operations with common error handling
+ */
+async function orchestrateBuild(
+    buildLogic: () => Promise<void>,
+    errorContext: string
+): Promise<void> {
     if (isImporting) {
         sendError('Import in progress', 'Please wait for the current import to complete.');
         return;
@@ -124,7 +129,31 @@ async function handleBuild(rootData: VisualNode) {
         // Reset state
         warnings = [];
         resetProcessedNodes();
+        clearImageCache();
 
+        await buildLogic();
+
+    } catch (error: unknown) {
+        const err = error as Error;
+        console.error(`${errorContext} error:`, err);
+        if (err.stack) {
+            console.error('Error stack:', err.stack);
+        }
+        sendError(
+            `Failed to ${errorContext.toLowerCase()}`,
+            err.message || String(err) || 'An unexpected error occurred during import.'
+        );
+    } finally {
+        isImporting = false;
+    }
+}
+
+// =====================
+// Build Handlers
+// =====================
+
+async function handleBuild(rootData: VisualNode) {
+    await orchestrateBuild(async () => {
         // Validate input data
         if (!rootData) {
             sendError('No data to import', 'The data object is empty or undefined.');
@@ -144,9 +173,6 @@ async function handleBuild(rootData: VisualNode) {
             sendError('Empty page', 'The scraped page has no visible content. Try a different page.');
             return;
         }
-
-        // Clear cache from previous imports
-        clearImageCache();
 
         // Step 1: Load fonts
         sendProgress('Loading fonts', 10, '', 'Preparing fonts...');
@@ -178,7 +204,7 @@ async function handleBuild(rootData: VisualNode) {
         }
 
         // Send completion with summary
-        const summary: any = {
+        const summary: { type: string; stats: object; warnings?: string[] } = {
             type: 'done',
             stats: {
                 totalNodes: processedNodes,
@@ -192,33 +218,12 @@ async function handleBuild(rootData: VisualNode) {
         }
 
         figma.ui.postMessage(summary);
-
-    } catch (error: any) {
-        console.error('Build error:', error);
-        console.error('Error stack:', error.stack);
-        sendError(
-            'Failed to build layout',
-            error.message || error.toString() || 'An unexpected error occurred during import.'
-        );
-    } finally {
-        isImporting = false;
-    }
+    }, 'build layout');
 }
 
 async function handleBuildComponents(data: { components: ComponentData[]; metadata: ComponentDocsMetadata }) {
-    if (isImporting) {
-        sendError('Import in progress', 'Please wait for the current import to complete.');
-        return;
-    }
-
-    isImporting = true;
-
-    try {
+    await orchestrateBuild(async () => {
         const { components, metadata } = data;
-
-        // Reset state
-        warnings = [];
-        resetProcessedNodes();
 
         if (!components || components.length === 0) {
             sendError('No components to import', 'No component data was provided.');
@@ -228,9 +233,6 @@ async function handleBuildComponents(data: { components: ComponentData[]; metada
         // Count total nodes across all components
         const totalNodes = components.reduce((sum, c) => sum + countNodes(c.tree), 0);
         setTotalNodes(totalNodes);
-
-        // Clear cache
-        clearImageCache();
 
         // Step 1: Load fonts from all components
         sendProgress('Loading fonts', 10, '', 'Preparing fonts...');
@@ -307,8 +309,9 @@ async function handleBuildComponents(data: { components: ComponentData[]; metada
 
                     builtNodes.push(node);
                 }
-            } catch (err: any) {
-                console.warn(`Failed to build component ${component.name}:`, err);
+            } catch (err: unknown) {
+                const error = err as Error;
+                console.warn(`Failed to build component ${component.name}:`, error);
                 sendWarning(`Failed to build component: ${component.name}`);
             }
         }
@@ -334,14 +337,5 @@ async function handleBuildComponents(data: { components: ComponentData[]; metada
         };
 
         figma.ui.postMessage(summary);
-
-    } catch (error: any) {
-        console.error('Component build error:', error);
-        sendError(
-            'Failed to build components',
-            error.message || error.toString()
-        );
-    } finally {
-        isImporting = false;
-    }
+    }, 'build components');
 }
