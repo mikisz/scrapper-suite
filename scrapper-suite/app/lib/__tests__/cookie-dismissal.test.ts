@@ -19,12 +19,6 @@ function createMockPage(overrides: Partial<{
     let evaluateCallCount = 0;
     const evaluateResults = overrides.evaluateResults || [];
 
-    const mockButton = {
-        click: overrides.clickError
-            ? jest.fn().mockRejectedValue(overrides.clickError)
-            : jest.fn().mockResolvedValue(undefined)
-    } as unknown as ElementHandle;
-
     return {
         waitForSelector: overrides.waitForSelectorError
             ? jest.fn().mockRejectedValue(overrides.waitForSelectorError)
@@ -336,18 +330,6 @@ describe('cookie-dismissal', () => {
 
     describe('button text patterns', () => {
         it('should match common accept button texts', async () => {
-            // These patterns are used in text-based button search
-            const expectedPatterns = [
-                'accept',
-                'Accept All',
-                'Accept Cookies',
-                'Allow',
-                'Allow All',
-                'I Agree',
-                'OK',
-                'Got It'
-            ];
-
             // Create mock that captures the patterns passed to evaluate
             let capturedPatterns: string[] = [];
             const mockPage = {
@@ -399,7 +381,7 @@ describe('integration scenarios', () => {
         const mockClick = jest.fn().mockResolvedValue(undefined);
         const mockButton = { click: mockClick } as unknown as ElementHandle;
 
-        let selectorChecks: string[] = [];
+        const selectorChecks: string[] = [];
         const mockPage = {
             waitForSelector: jest.fn().mockResolvedValue(null),
             $: jest.fn().mockImplementation((selector: string) => {
