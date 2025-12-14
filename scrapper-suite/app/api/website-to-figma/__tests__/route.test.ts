@@ -1,18 +1,18 @@
 /**
  * Tests for website-to-figma API route
- * 
+ *
  * These tests mock Puppeteer to avoid actually launching browsers.
  */
 
 import { POST } from '../route';
 import { NextRequest } from 'next/server';
 
-// Mock puppeteer-extra and stealth plugin (must be before imports)
+// Mock page and browser objects
 const mockPage = {
-  setViewport: jest.fn(),
-  goto: jest.fn(),
-  evaluate: jest.fn(),
-  close: jest.fn(),
+  setViewport: jest.fn().mockResolvedValue(undefined),
+  goto: jest.fn().mockResolvedValue(undefined),
+  evaluate: jest.fn().mockResolvedValue({ type: 'FRAME', children: [] }),
+  close: jest.fn().mockResolvedValue(undefined),
   url: jest.fn(() => 'https://example.com'),
 };
 
@@ -24,17 +24,14 @@ const mockBrowser = {
   pages: jest.fn(() => Promise.resolve([mockPage])),
 };
 
-jest.mock('puppeteer-extra', () => ({
-  __esModule: true,
-  default: {
-    use: jest.fn(),
-    launch: jest.fn(() => Promise.resolve(mockBrowser)),
+// Mock the browser-pool module to return our mock browser
+jest.mock('../../../lib/browser-pool', () => ({
+  browserPool: {
+    acquire: jest.fn(() => Promise.resolve(mockBrowser)),
+    release: jest.fn(() => Promise.resolve()),
+    getStats: jest.fn(() => ({ total: 1, inUse: 0, available: 1 })),
+    shutdown: jest.fn(() => Promise.resolve()),
   },
-}));
-
-jest.mock('puppeteer-extra-plugin-stealth', () => ({
-  __esModule: true,
-  default: jest.fn(),
 }));
 
 // Mock fs for reading serializer
@@ -47,10 +44,6 @@ jest.mock('fs', () => ({
     };
   `),
 }));
-
-// Get mock reference - require() needed here because imports are hoisted above jest.mock()
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const puppeteer = require('puppeteer-extra').default;
 
 describe('POST /api/website-to-figma', () => {
   beforeEach(() => {
@@ -93,39 +86,44 @@ describe('POST /api/website-to-figma', () => {
         { type: 'TEXT_NODE', content: 'Hello World' }
       ],
     };
-    
-    // First evaluate injects the serializer, second runs it
+
+    // Mock all 4 evaluate calls in order:
+    // 1. Scroll to trigger lazy loading
+    // 2. Wait for images to load
+    // 3. Inject serializer code
+    // 4. Run serializer and return result
     mockPage.evaluate
-      .mockResolvedValueOnce(undefined) // Serializer injection
-      .mockResolvedValueOnce(mockFigmaTree); // Serialization result
-    
+      .mockResolvedValueOnce(undefined) // Scroll
+      .mockResolvedValueOnce(undefined) // Wait for images
+      .mockResolvedValueOnce(undefined) // Inject serializer
+      .mockResolvedValueOnce(mockFigmaTree); // Run serializer
+
     const request = new NextRequest('http://localhost:3000/api/website-to-figma', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://example.com' }),
     });
-    
+
     const response = await POST(request);
     const data = await response.json();
-    
+
     expect(response.status).toBe(200);
     expect(data.message).toBe('Scraping successful');
     expect(data.data).toEqual(mockFigmaTree);
   });
 
-  it('should launch browser with correct options', async () => {
+  it('should acquire browser from pool', async () => {
     mockPage.evaluate.mockResolvedValue({ type: 'FRAME', children: [] });
-    
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { browserPool } = require('../../../lib/browser-pool');
+
     const request = new NextRequest('http://localhost:3000/api/website-to-figma', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://example.com' }),
     });
-    
+
     await POST(request);
-    
-    expect(puppeteer.launch).toHaveBeenCalledWith({
-      headless: true,
-      args: expect.arrayContaining(['--no-sandbox', '--disable-setuid-sandbox']),
-    });
+
+    expect(browserPool.acquire).toHaveBeenCalled();
   });
 
   it('should set correct viewport', async () => {
@@ -159,46 +157,52 @@ describe('POST /api/website-to-figma', () => {
 
   it('should release browser to pool after successful scrape', async () => {
     mockPage.evaluate.mockResolvedValue({ type: 'FRAME', children: [] });
-    
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { browserPool } = require('../../../lib/browser-pool');
+
     const request = new NextRequest('http://localhost:3000/api/website-to-figma', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://example.com' }),
     });
-    
+
     await POST(request);
-    
-    // Browser pool keeps browsers open for reuse, so we check pages were closed instead
-    expect(mockPage.close).toHaveBeenCalled();
+
+    // Browser pool release should be called
+    expect(browserPool.release).toHaveBeenCalled();
   });
 
   it('should handle navigation error gracefully', async () => {
     mockPage.goto.mockRejectedValueOnce(new Error('Navigation timeout'));
-    
+
     const request = new NextRequest('http://localhost:3000/api/website-to-figma', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://slow-site.com' }),
     });
-    
+
     const response = await POST(request);
     const data = await response.json();
-    
+
     expect(response.status).toBe(500);
-    expect(data.error).toBe('Failed to scrape website');
+    // Error is mapped to user-friendly message
+    expect(data.error).toBe('Navigation timeout');
   });
 
   it('should handle serialization errors', async () => {
+    // Mock all 4 evaluate calls, with the 4th one failing
     mockPage.evaluate
-      .mockResolvedValueOnce(undefined) // Serializer injection
-      .mockRejectedValueOnce(new Error('Serialization failed')); // Serialization error
-    
+      .mockResolvedValueOnce(undefined) // Scroll
+      .mockResolvedValueOnce(undefined) // Wait for images
+      .mockResolvedValueOnce(undefined) // Inject serializer
+      .mockRejectedValueOnce(new Error('Serialization failed')); // Serialization fails
+
     const request = new NextRequest('http://localhost:3000/api/website-to-figma', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://example.com' }),
     });
-    
+
     const response = await POST(request);
     const data = await response.json();
-    
+
     expect(response.status).toBe(500);
     expect(data.details).toBe('Serialization failed');
   });
@@ -227,19 +231,22 @@ describe('POST /api/website-to-figma', () => {
         },
       ],
     };
-    
+
+    // Mock all 4 evaluate calls
     mockPage.evaluate
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(complexTree);
-    
+      .mockResolvedValueOnce(undefined) // Scroll
+      .mockResolvedValueOnce(undefined) // Wait for images
+      .mockResolvedValueOnce(undefined) // Inject serializer
+      .mockResolvedValueOnce(complexTree); // Run serializer
+
     const request = new NextRequest('http://localhost:3000/api/website-to-figma', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://example.com' }),
     });
-    
+
     const response = await POST(request);
     const data = await response.json();
-    
+
     expect(data.data.type).toBe('FRAME');
     expect(data.data.children).toHaveLength(2);
     expect(data.data.children[0].type).toBe('FRAME');

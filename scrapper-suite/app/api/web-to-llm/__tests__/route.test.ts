@@ -1,13 +1,13 @@
 /**
  * Tests for web-to-llm API route
- * 
+ *
  * These tests mock Puppeteer, fs operations, and other dependencies.
  */
 
 import { POST } from '../route';
 import { NextRequest } from 'next/server';
 
-// Mock puppeteer-extra
+// Mock page and browser objects
 const mockPage = {
   setViewport: jest.fn(),
   goto: jest.fn(),
@@ -25,17 +25,14 @@ const mockBrowser = {
   pages: jest.fn(() => Promise.resolve([mockPage])),
 };
 
-jest.mock('puppeteer-extra', () => ({
-  __esModule: true,
-  default: {
-    use: jest.fn(),
-    launch: jest.fn(() => Promise.resolve(mockBrowser)),
+// Mock the browser-pool module to return our mock browser
+jest.mock('../../../lib/browser-pool', () => ({
+  browserPool: {
+    acquire: jest.fn(() => Promise.resolve(mockBrowser)),
+    release: jest.fn(() => Promise.resolve()),
+    getStats: jest.fn(() => ({ total: 1, inUse: 0, available: 1 })),
+    shutdown: jest.fn(() => Promise.resolve()),
   },
-}));
-
-jest.mock('puppeteer-extra-plugin-stealth', () => ({
-  __esModule: true,
-  default: jest.fn(),
 }));
 
 // Mock fs-extra
@@ -98,9 +95,7 @@ jest.mock('turndown', () => {
   }));
 });
 
-// Import after mocks - require() needed here because imports are hoisted above jest.mock()
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const puppeteer = require('puppeteer-extra').default;
+// Get mock reference - require() needed here because imports are hoisted above jest.mock()
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require('fs-extra');
 
@@ -134,18 +129,18 @@ describe('POST /api/web-to-llm', () => {
     expect(fs.ensureDir).toHaveBeenCalledTimes(2);
   });
 
-  it('should launch browser with correct options', async () => {
+  it('should acquire browser from pool', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { browserPool } = require('../../../lib/browser-pool');
+
     const request = new NextRequest('http://localhost:3000/api/web-to-llm', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://example.com' }),
     });
-    
+
     await POST(request);
-    
-    expect(puppeteer.launch).toHaveBeenCalledWith({
-      headless: true,
-      args: expect.arrayContaining(['--no-sandbox', '--disable-setuid-sandbox']),
-    });
+
+    expect(browserPool.acquire).toHaveBeenCalled();
   });
 
   it('should navigate with networkidle2 wait strategy', async () => {
@@ -196,15 +191,18 @@ describe('POST /api/web-to-llm', () => {
   });
 
   it('should release browser to pool after processing', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { browserPool } = require('../../../lib/browser-pool');
+
     const request = new NextRequest('http://localhost:3000/api/web-to-llm', {
       method: 'POST',
       body: JSON.stringify({ url: 'https://example.com' }),
     });
-    
+
     await POST(request);
-    
-    // Browser pool keeps browsers open for reuse, pages get closed instead
-    expect(mockPage.close).toHaveBeenCalled();
+
+    // Browser pool release should be called
+    expect(browserPool.release).toHaveBeenCalled();
   });
 
   it('should return zip file response', async () => {
