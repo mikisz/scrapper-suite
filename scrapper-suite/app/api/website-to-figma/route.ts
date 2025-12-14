@@ -2,8 +2,48 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { browserPool } from '../../lib/browser-pool';
 import { validateScrapingUrl } from '@/app/lib/validation';
+import { getComponentDetectorScript, DetectionResult } from '@/app/lib/component-detector';
+import { getStyleInjectorScript, ThemeType } from '@/app/lib/style-injector';
+import { getVariantExtractorScript } from '@/app/lib/variant-extractor';
 import fs from 'fs';
 import path from 'path';
+
+// Types for component-docs mode
+type Mode = 'full-page' | 'component-docs';
+
+interface ComponentDocsOptions {
+    theme?: ThemeType;
+    excludeSelectors?: string[];
+}
+
+// Figma tree node structure returned by the DOM serializer
+interface FigmaTreeNode {
+    type: string;
+    name?: string;
+    children?: FigmaTreeNode[];
+    globalBounds?: { x: number; y: number; width: number; height: number };
+    componentName?: string | null;
+    componentVariant?: string | null;
+    componentBounds?: { x: number; y: number; width: number; height: number };
+    [key: string]: unknown;
+}
+
+interface ExtractedComponent {
+    name: string;
+    variant?: string;
+    tree: FigmaTreeNode;
+    bounds: { x: number; y: number; width: number; height: number };
+}
+
+interface ComponentDocsResponse {
+    components: ExtractedComponent[];
+    metadata: {
+        pageTitle: string;
+        libraryDetected: string | null;
+        totalComponentsFound: number;
+        themeApplied: string;
+    };
+}
 
 // User-friendly error messages mapping
 const ERROR_MESSAGES: Record<string, { message: string; suggestion: string }> = {
@@ -109,7 +149,11 @@ export async function POST(request: Request) {
             );
         }
         
-        const { url } = body;
+        const { url, mode = 'full-page', options = {} } = body as {
+            url: string;
+            mode?: Mode;
+            options?: ComponentDocsOptions;
+        };
 
         // Validate URL format and security
         const validation = validateScrapingUrl(url);
@@ -168,15 +212,126 @@ export async function POST(request: Request) {
             // Execute the library code to define window.FigmaSerializer
             await page.evaluate(serializerCode);
 
-            // Run the serialization
+            // COMPONENT-DOCS MODE
+            if (mode === 'component-docs') {
+                const theme = options.theme || 'tailwind';
+
+                // 1. Inject styles for unstyled components
+                if (theme === 'tailwind') {
+                    const styleInjectorScript = getStyleInjectorScript(theme);
+                    await page.evaluate(styleInjectorScript);
+                    // Wait for Tailwind CDN to load and process
+                    await page.waitForFunction(() => typeof (window as unknown as { tailwind?: unknown }).tailwind !== 'undefined', { timeout: 5000 }).catch(() => {
+                        console.log('Tailwind CDN did not load, continuing without it');
+                    });
+                    // The Tailwind Play CDN runs a JIT compiler over the DOM. There's no event
+                    // to signal completion, so we use a short delay to allow time for styles to be applied.
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+
+                // 2. Detect components on the page
+                const detectorScript = getComponentDetectorScript();
+                const detectionResult = await page.evaluate(detectorScript) as DetectionResult;
+
+                if (detectionResult.totalFound === 0) {
+                    await page.close();
+                    await browserPool.release(browser);
+                    return NextResponse.json({
+                        error: 'No components detected',
+                        suggestion: 'The page may not have recognizable component demos. Try a different documentation page.',
+                    }, { status: 404 });
+                }
+
+                // 3. Extract variant information
+                const variantScript = getVariantExtractorScript();
+                const selectors = detectionResult.components.map(c => c.selector);
+                const variantInfo = await page.evaluate(variantScript, selectors) as Array<{
+                    name: string | null;
+                    variant: string | null;
+                    structureHash: string;
+                    tagStructure: string;
+                } | null>;
+
+                // 4. Serialize each detected component in parallel for better performance
+                const componentPromises = detectionResult.components.map(async (detected, i) => {
+                    const variant = variantInfo[i];
+
+                    try {
+                        const componentTree = await page.evaluate(
+                            (selector: string, name: string, variantName: string | null) => {
+                                const element = document.querySelector(selector);
+                                if (!element) return null;
+                                // @ts-expect-error FigmaSerializer is injected at runtime
+                                return window.FigmaSerializer.serializeElement(element, {
+                                    name,
+                                    variant: variantName
+                                });
+                            },
+                            detected.selector,
+                            variant?.name || detected.name,
+                            variant?.variant || detected.variant || null
+                        );
+
+                        if (componentTree) {
+                            const extractedVariant = variant?.variant || detected.variant;
+                            const result: ExtractedComponent = {
+                                name: variant?.name || detected.name,
+                                tree: componentTree,
+                                bounds: detected.bounds,
+                            };
+                            if (extractedVariant) {
+                                result.variant = extractedVariant;
+                            }
+                            return result;
+                        }
+                    } catch (e) {
+                        console.warn(`Failed to serialize component: ${detected.selector}`, e);
+                    }
+                    return null;
+                });
+
+                const extractedComponents = (await Promise.all(componentPromises))
+                    .filter((c): c is ExtractedComponent => c !== null);
+
+                // Get page title
+                const pageTitle = await page.title();
+
+                await page.close();
+                await browserPool.release(browser);
+
+                if (extractedComponents.length === 0) {
+                    return NextResponse.json({
+                        error: 'Failed to extract components',
+                        suggestion: 'Components were detected but could not be serialized. The page structure may be unsupported.',
+                    }, { status: 500 });
+                }
+
+                const response: ComponentDocsResponse = {
+                    components: extractedComponents,
+                    metadata: {
+                        pageTitle,
+                        libraryDetected: detectionResult.libraryDetected,
+                        totalComponentsFound: extractedComponents.length,
+                        themeApplied: theme,
+                    },
+                };
+
+                return NextResponse.json({
+                    message: `Extracted ${extractedComponents.length} component(s)`,
+                    mode: 'component-docs',
+                    ...response,
+                });
+            }
+
+            // FULL-PAGE MODE (default)
             const figmaTree = await page.evaluate(() => {
-                // @ts-expect-error FigmaSerializer is injected by serializerCode
+                // @ts-expect-error FigmaSerializer is injected at runtime
                 return window.FigmaSerializer.serialize(document.body);
             });
 
             await page.close();
             await browserPool.release(browser);
-            
+
             // Check if we got valid data
             if (!figmaTree || (figmaTree.type === 'FRAME' && (!figmaTree.children || figmaTree.children.length === 0))) {
                 return NextResponse.json({
