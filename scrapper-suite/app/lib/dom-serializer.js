@@ -46,6 +46,41 @@ window.FigmaSerializer.serializeElement = function (element, options = {}) {
 
 window.FigmaSerializer.serialize = function (rootNode = document.body) {
 
+    // Check if an element has width: 100% or similar full-width behavior
+    function hasFullWidth(el, computed) {
+        // Check inline style for explicit 100%
+        if (el.style && el.style.width === '100%') return true;
+
+        // Check if element stretches to container width
+        // Block elements naturally take 100% width
+        const display = computed.display;
+        if (display === 'block' || display === 'flex' || display === 'grid') {
+            // Check if width is not explicitly constrained
+            const width = computed.width;
+            const maxWidth = computed.maxWidth;
+
+            // If width is auto and no max-width constraint, it's full width
+            if (width === 'auto' && (maxWidth === 'none' || !maxWidth)) {
+                return true;
+            }
+
+            // Check if element is nearly as wide as parent
+            const rect = el.getBoundingClientRect();
+            const parent = el.parentElement;
+            if (parent) {
+                const parentRect = parent.getBoundingClientRect();
+                const parentPadding = parseFloat(computed.paddingLeft) + parseFloat(computed.paddingRight);
+                const availableWidth = parentRect.width - parentPadding;
+                // If element width is >= 95% of available width, consider it full-width
+                if (availableWidth > 0 && rect.width / availableWidth >= 0.95) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     function getRgb(color) {
         if (!color || color === 'transparent' || color === 'rgba(0, 0, 0, 0)') return null;
         // Match rgba with optional alpha: rgba(r, g, b, a) or rgb(r, g, b)
@@ -390,9 +425,42 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
 
             if (!isImage && !hasShadow && !isDisplayContents && (rect.width === 0 || rect.height === 0)) return null;
 
+            // Detect scrollable containers and use their full scroll dimensions
+            // This handles: root element, sidedrawers, modal content, etc.
+            const isRootElement = el === rootNode || el === document.body || el === document.documentElement;
+
+            // Check if element is a scrollable container
+            const isScrollableY = (computed.overflowY === 'auto' || computed.overflowY === 'scroll') &&
+                                  el.scrollHeight > el.clientHeight;
+            const isScrollableX = (computed.overflowX === 'auto' || computed.overflowX === 'scroll') &&
+                                  el.scrollWidth > el.clientWidth;
+
+            let elementHeight = rect.height;
+            let elementWidth = rect.width;
+
+            if (isRootElement || isScrollableY) {
+                // Use scrollHeight to get the full content height, not just viewport
+                elementHeight = Math.max(
+                    el.scrollHeight,
+                    el.offsetHeight,
+                    rect.height
+                );
+            }
+
+            if (isRootElement || isScrollableX) {
+                // For width, use the larger of scrollWidth or rect.width
+                elementWidth = Math.max(
+                    el.scrollWidth,
+                    el.offsetWidth,
+                    rect.width
+                );
+            }
+
             const styles = {
-                width: rect.width,
-                height: rect.height,
+                width: elementWidth,
+                height: elementHeight,
+                isFullWidth: hasFullWidth(el, computed), // Track if element should fill container width
+                isScrollable: isScrollableX || isScrollableY, // Track if element is a scrollable container
                 display: computed.display,
                 position: computed.position,
                 top: parseUnit(computed.top),
@@ -471,6 +539,20 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 letterSpacing: parseUnit(computed.letterSpacing),
                 textTransform: computed.textTransform,
                 textDecoration: computed.textDecorationLine, // computed style often splits decoration
+
+                // Text layout - important for proper text rendering
+                whiteSpace: computed.whiteSpace,
+                wordBreak: computed.wordBreak,
+                overflowWrap: computed.overflowWrap,
+                textOverflow: computed.textOverflow,
+
+                // Visual effects
+                mixBlendMode: computed.mixBlendMode !== 'normal' ? computed.mixBlendMode : null,
+                filter: computed.filter !== 'none' ? computed.filter : null,
+                backdropFilter: computed.backdropFilter !== 'none' ? computed.backdropFilter : null,
+
+                // Object fit for background images
+                objectPosition: computed.objectPosition,
 
                 overflowX: computed.overflowX,
                 overflowY: computed.overflowY,
@@ -569,15 +651,28 @@ window.FigmaSerializer.serialize = function (rootNode = document.body) {
                 }
                 
                 // Extract fill color if uniform across the SVG
-                const svgFill = computed.fill !== 'none' ? getRgb(computed.fill) : null;
+                // Handle 'currentColor' by using the inherited text color
+                let svgFill = null;
+                if (computed.fill && computed.fill !== 'none') {
+                    svgFill = getRgb(computed.fill);
+                }
+                // If fill is currentColor or not set, use the text color from styles
+                if (!svgFill && styles.color) {
+                    svgFill = styles.color;
+                }
+
                 const svgStroke = computed.stroke !== 'none' ? getRgb(computed.stroke) : null;
-                
+
+                // Also capture the inherited text color for currentColor support
+                const inheritedColor = getRgb(computed.color);
+
                 // Return as VECTOR type with raw SVG string for Figma's createNodeFromSvg
                 return {
                     type: 'VECTOR',
                     svgString: svgString,
                     svgFill: svgFill,
                     svgStroke: svgStroke,
+                    inheritedColor: inheritedColor, // For currentColor resolution
                     viewBox: el.getAttribute('viewBox'),
                     styles,
                     tag: 'svg'

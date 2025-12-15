@@ -293,32 +293,125 @@ export function angleToGradientTransform(angleDeg: number): Transform {
     ];
 }
 
+// CSS Named colors mapping (most common ones)
+const NAMED_COLORS: Record<string, string> = {
+    'transparent': 'rgba(0,0,0,0)',
+    'black': '#000000', 'white': '#ffffff',
+    'red': '#ff0000', 'green': '#008000', 'blue': '#0000ff',
+    'yellow': '#ffff00', 'cyan': '#00ffff', 'magenta': '#ff00ff',
+    'gray': '#808080', 'grey': '#808080',
+    'silver': '#c0c0c0', 'maroon': '#800000', 'olive': '#808000',
+    'lime': '#00ff00', 'aqua': '#00ffff', 'teal': '#008080',
+    'navy': '#000080', 'fuchsia': '#ff00ff', 'purple': '#800080',
+    'orange': '#ffa500', 'pink': '#ffc0cb', 'brown': '#a52a2a',
+    'coral': '#ff7f50', 'crimson': '#dc143c', 'gold': '#ffd700',
+    'indigo': '#4b0082', 'ivory': '#fffff0', 'khaki': '#f0e68c',
+    'lavender': '#e6e6fa', 'lightblue': '#add8e6', 'lightgray': '#d3d3d3',
+    'lightgreen': '#90ee90', 'lightyellow': '#ffffe0', 'darkblue': '#00008b',
+    'darkgray': '#a9a9a9', 'darkgreen': '#006400', 'darkred': '#8b0000',
+    'skyblue': '#87ceeb', 'steelblue': '#4682b4', 'tomato': '#ff6347',
+    'turquoise': '#40e0d0', 'violet': '#ee82ee', 'wheat': '#f5deb3',
+};
+
+/**
+ * Convert HSL to RGB
+ */
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+    h = h / 360;
+    s = s / 100;
+    l = l / 100;
+
+    let r, g, b;
+
+    if (s === 0) {
+        r = g = b = l;
+    } else {
+        const hue2rgb = (p: number, q: number, t: number) => {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1/6) return p + (q - p) * 6 * t;
+            if (t < 1/2) return q;
+            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+            return p;
+        };
+
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1/3);
+    }
+
+    return { r, g, b };
+}
+
 /**
  * Parse color string to RGBA object
+ * Handles: rgb, rgba, hsl, hsla, hex, named colors
  */
 export function parseColorString(colorStr: string): RGBA | null {
+    if (!colorStr) return null;
+
+    const str = colorStr.trim().toLowerCase();
     let r = 0, g = 0, b = 0, a = 1;
-    if (colorStr.startsWith('rgba')) {
-        const nums = colorStr.match(/[\d.]+/g)?.map(Number);
+
+    // Check named colors first
+    if (NAMED_COLORS[str]) {
+        return parseColorString(NAMED_COLORS[str]);
+    }
+
+    // RGBA
+    if (str.startsWith('rgba')) {
+        const nums = str.match(/[\d.]+/g)?.map(Number);
         if (nums && nums.length >= 3) {
             r = nums[0] / 255;
             g = nums[1] / 255;
             b = nums[2] / 255;
             a = nums[3] ?? 1;
         }
-    } else if (colorStr.startsWith('rgb')) {
-        const nums = colorStr.match(/[\d.]+/g)?.map(Number);
+    }
+    // RGB
+    else if (str.startsWith('rgb')) {
+        const nums = str.match(/[\d.]+/g)?.map(Number);
         if (nums && nums.length >= 3) {
             r = nums[0] / 255;
             g = nums[1] / 255;
             b = nums[2] / 255;
         }
-    } else if (colorStr.startsWith('#')) {
-        const hex = colorStr.slice(1);
+    }
+    // HSLA
+    else if (str.startsWith('hsla')) {
+        const nums = str.match(/[\d.]+/g)?.map(Number);
+        if (nums && nums.length >= 3) {
+            const rgb = hslToRgb(nums[0], nums[1], nums[2]);
+            r = rgb.r;
+            g = rgb.g;
+            b = rgb.b;
+            a = nums[3] ?? 1;
+        }
+    }
+    // HSL
+    else if (str.startsWith('hsl')) {
+        const nums = str.match(/[\d.]+/g)?.map(Number);
+        if (nums && nums.length >= 3) {
+            const rgb = hslToRgb(nums[0], nums[1], nums[2]);
+            r = rgb.r;
+            g = rgb.g;
+            b = rgb.b;
+        }
+    }
+    // Hex
+    else if (str.startsWith('#')) {
+        const hex = str.slice(1);
         if (hex.length === 3) {
             r = parseInt(hex[0] + hex[0], 16) / 255;
             g = parseInt(hex[1] + hex[1], 16) / 255;
             b = parseInt(hex[2] + hex[2], 16) / 255;
+        } else if (hex.length === 4) {
+            r = parseInt(hex[0] + hex[0], 16) / 255;
+            g = parseInt(hex[1] + hex[1], 16) / 255;
+            b = parseInt(hex[2] + hex[2], 16) / 255;
+            a = parseInt(hex[3] + hex[3], 16) / 255;
         } else if (hex.length >= 6) {
             r = parseInt(hex.slice(0, 2), 16) / 255;
             g = parseInt(hex.slice(2, 4), 16) / 255;
@@ -328,6 +421,13 @@ export function parseColorString(colorStr: string): RGBA | null {
     } else {
         return null;
     }
+
+    // Clamp values to valid range
+    r = Math.max(0, Math.min(1, r));
+    g = Math.max(0, Math.min(1, g));
+    b = Math.max(0, Math.min(1, b));
+    a = Math.max(0, Math.min(1, a));
+
     return { r, g, b, a };
 }
 
