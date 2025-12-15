@@ -99,24 +99,36 @@ export async function buildNode(
     const s = (data.styles || data) as any;
 
     // --- 1. CREATE NODE BASED ON TYPE ---
-    if (data.type === 'VECTOR') {
-        node = await createVectorNode(data, s);
-    }
-    else if (data.type === 'IMAGE') {
-        node = createImageNode(data, s);
-    }
-    else if (data.type === 'PSEUDO_ELEMENT') {
-        node = await createPseudoElementNode(data, s);
-    }
-    else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
-        node = await createTextNode(data, s);
-    }
-    else if (data.type === 'FRAME') {
-        node = createFrameNode(data, s);
-    }
-    else {
-        // Unknown type
-        return;
+    try {
+        if (data.type === 'VECTOR') {
+            node = await createVectorNode(data, s);
+        }
+        else if (data.type === 'IMAGE') {
+            node = createImageNode(data, s);
+        }
+        else if (data.type === 'PSEUDO_ELEMENT') {
+            node = await createPseudoElementNode(data, s);
+        }
+        else if (data.type === 'TEXT_NODE' || (data.type === 'TEXT' && data.content)) {
+            node = await createTextNode(data, s);
+        }
+        else if (data.type === 'FRAME') {
+            node = createFrameNode(data, s);
+        }
+        else {
+            // Unknown type
+            return;
+        }
+    } catch (createErr) {
+        console.warn('Failed to create node:', createErr, 'Type:', data.type, 'Tag:', data.tag);
+        sendWarning(`Failed to create ${data.type}: ${data.tag || 'unknown'}`);
+        // Create a placeholder frame so we can still process children
+        if (data.children && data.children.length > 0) {
+            node = figma.createFrame();
+            node.name = `${data.tag || data.type} (error)`;
+        } else {
+            return;
+        }
     }
 
     // --- 2. COMMON SIZE & POSITION ---
@@ -167,16 +179,22 @@ export async function buildNode(
     // --- 4. RECURSION ---
     if (data.children) {
         for (const childData of data.children) {
-            const childNode = await buildNode(childData, node, data);
+            try {
+                const childNode = await buildNode(childData, node, data);
 
-            // Apply flex item properties
-            if (childNode && (s.display === 'flex' || s.display === 'inline-flex') && 'layoutGrow' in childNode) {
-                applyFlexItemProperties(childNode as FrameNode, childData);
-            }
+                // Apply flex item properties
+                if (childNode && (s.display === 'flex' || s.display === 'inline-flex') && 'layoutGrow' in childNode) {
+                    applyFlexItemProperties(childNode as FrameNode, childData, s);
+                }
 
-            // Apply grid item sizing
-            if (childNode && s.display === 'grid' && (data as any)._gridInfo) {
-                applyGridItemSizing(childNode, childData, (data as any)._gridInfo);
+                // Apply grid item sizing
+                if (childNode && s.display === 'grid' && (data as any)._gridInfo) {
+                    applyGridItemSizing(childNode, childData, (data as any)._gridInfo);
+                }
+            } catch (childErr) {
+                // Log but continue - don't let one child failure break the entire build
+                console.warn('Failed to build child node:', childErr, 'Tag:', childData.tag || childData.type);
+                sendWarning(`Skipped element: ${childData.tag || childData.type}`);
             }
         }
     }
@@ -552,6 +570,14 @@ function createFrameNode(data: VisualNode, s: any): FrameNode {
 // =====================
 
 function configureFrameLayout(frame: FrameNode, data: VisualNode, s: any): void {
+    // Apply padding for all layout types
+    const applyPadding = () => {
+        frame.paddingTop = s.padding?.top || 0;
+        frame.paddingRight = s.padding?.right || 0;
+        frame.paddingBottom = s.padding?.bottom || 0;
+        frame.paddingLeft = s.padding?.left || 0;
+    };
+
     if (s.display === 'grid') {
         const containerWidth = s.width || 0;
         const gridInfo = parseGridTemplate(s.gridTemplateColumns, containerWidth);
@@ -579,11 +605,7 @@ function configureFrameLayout(frame: FrameNode, data: VisualNode, s: any): void 
 
         frame.itemSpacing = columnGap;
         frame.counterAxisSpacing = s.rowGap || s.gap || 0;
-
-        frame.paddingTop = s.padding?.top || 0;
-        frame.paddingRight = s.padding?.right || 0;
-        frame.paddingBottom = s.padding?.bottom || 0;
-        frame.paddingLeft = s.padding?.left || 0;
+        applyPadding();
 
         // Alignment
         const alignItems = s.alignItems || 'stretch';
@@ -601,50 +623,85 @@ function configureFrameLayout(frame: FrameNode, data: VisualNode, s: any): void 
             case 'end': case 'flex-end': frame.primaryAxisAlignItems = 'MAX'; break;
             default: frame.primaryAxisAlignItems = 'MIN';
         }
-    } else if (s.display === 'flex') {
-        frame.layoutMode = s.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
+    } else if (s.display === 'flex' || s.display === 'inline-flex') {
+        // Handle both flex and inline-flex
+        const isRow = s.flexDirection === 'row' || s.flexDirection === 'row-reverse' || !s.flexDirection;
+        frame.layoutMode = isRow ? 'HORIZONTAL' : 'VERTICAL';
 
         if (s.flexWrap === 'wrap' || s.flexWrap === 'wrap-reverse') {
             frame.layoutWrap = 'WRAP';
             frame.counterAxisSpacing = s.rowGap || s.gap || 0;
         }
 
-        frame.itemSpacing = s.columnGap || s.gap || 0;
-        frame.paddingTop = s.padding?.top || 0;
-        frame.paddingRight = s.padding?.right || 0;
-        frame.paddingBottom = s.padding?.bottom || 0;
-        frame.paddingLeft = s.padding?.left || 0;
+        // For flex, use the appropriate gap based on direction
+        const mainAxisGap = isRow ? (s.columnGap || s.gap || 0) : (s.rowGap || s.gap || 0);
+        frame.itemSpacing = mainAxisGap;
+        applyPadding();
 
         switch (s.alignItems) {
             case 'center': frame.counterAxisAlignItems = 'CENTER'; break;
-            case 'flex-end': frame.counterAxisAlignItems = 'MAX'; break;
+            case 'flex-end': case 'end': frame.counterAxisAlignItems = 'MAX'; break;
+            case 'stretch': frame.counterAxisAlignItems = 'MIN'; break; // Figma doesn't have stretch, MIN is closest
             default: frame.counterAxisAlignItems = 'MIN';
         }
         switch (s.justifyContent) {
             case 'center': frame.primaryAxisAlignItems = 'CENTER'; break;
             case 'space-between': frame.primaryAxisAlignItems = 'SPACE_BETWEEN'; break;
-            case 'flex-end': frame.primaryAxisAlignItems = 'MAX'; break;
+            case 'space-around': case 'space-evenly': frame.primaryAxisAlignItems = 'SPACE_BETWEEN'; break;
+            case 'flex-end': case 'end': frame.primaryAxisAlignItems = 'MAX'; break;
             default: frame.primaryAxisAlignItems = 'MIN';
         }
     } else {
-        // Block layout -> Vertical AutoLayout
+        // Block/inline-block layout -> Vertical AutoLayout (stacking)
         frame.layoutMode = 'VERTICAL';
+        applyPadding();
+
+        // For block elements, children stack vertically with no gap by default
+        frame.itemSpacing = 0;
+        frame.counterAxisAlignItems = 'MIN';
+        frame.primaryAxisAlignItems = 'MIN';
+    }
+
+    // Set sizing mode based on the element's width/height behavior
+    // This is critical for proper auto-layout behavior
+    try {
+        // Check if width is set explicitly vs auto/100%
+        const hasExplicitWidth = s.width && s.width > 0;
+        const hasExplicitHeight = s.height && s.height > 0;
+
+        // For the primary axis (direction of layout)
+        // If we have a fixed size, use FIXED; otherwise HUG contents
+        if (frame.layoutMode === 'HORIZONTAL') {
+            frame.primaryAxisSizingMode = hasExplicitWidth ? 'FIXED' : 'AUTO';
+            // Counter axis (vertical) - use FIXED if height is set
+            frame.counterAxisSizingMode = hasExplicitHeight ? 'FIXED' : 'AUTO';
+        } else {
+            // VERTICAL layout
+            frame.primaryAxisSizingMode = hasExplicitHeight ? 'FIXED' : 'AUTO';
+            // Counter axis (horizontal) - use FIXED if width is set
+            frame.counterAxisSizingMode = hasExplicitWidth ? 'FIXED' : 'AUTO';
+        }
+    } catch {
+        // Some older Figma API versions may not support these properties
     }
 }
 
-function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode): void {
+function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode, parentStyles: any): void {
     const childStyles = (childData.styles || childData) as any;
 
-    if (childStyles.flexGrow && childStyles.flexGrow > 0) {
-        try {
-            childNode.layoutGrow = childStyles.flexGrow;
-        } catch {
-            // Some nodes don't support layoutGrow
-        }
-    }
+    // Determine parent flex direction to apply sizing correctly
+    const isParentRow = parentStyles.flexDirection === 'row' ||
+                        parentStyles.flexDirection === 'row-reverse' ||
+                        !parentStyles.flexDirection;
 
-    if (childStyles.alignSelf && childStyles.alignSelf !== 'auto') {
-        try {
+    try {
+        // Handle flex-grow - if > 0, the element should fill available space
+        if (childStyles.flexGrow && childStyles.flexGrow > 0) {
+            childNode.layoutGrow = childStyles.flexGrow;
+        }
+
+        // Handle alignSelf
+        if (childStyles.alignSelf && childStyles.alignSelf !== 'auto') {
             const alignMap: Record<string, 'MIN' | 'CENTER' | 'MAX' | 'STRETCH'> = {
                 'flex-start': 'MIN',
                 'start': 'MIN',
@@ -657,9 +714,35 @@ function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode): v
             if (layoutAlign) {
                 childNode.layoutAlign = layoutAlign;
             }
-        } catch {
-            // Some nodes don't support layoutAlign
         }
+
+        // Set proper sizing mode for flex children based on parent direction
+        // This helps maintain the correct fill/hug behavior
+        if ('layoutSizingHorizontal' in childNode) {
+            if (isParentRow && childStyles.flexGrow && childStyles.flexGrow > 0) {
+                // flex-grow in row direction fills horizontal
+                childNode.layoutSizingHorizontal = 'FILL';
+            } else if (childStyles.width && childStyles.width > 0) {
+                childNode.layoutSizingHorizontal = 'FIXED';
+            } else {
+                childNode.layoutSizingHorizontal = 'HUG';
+            }
+        }
+
+        if ('layoutSizingVertical' in childNode) {
+            if (!isParentRow && childStyles.flexGrow && childStyles.flexGrow > 0) {
+                // flex-grow in column direction fills vertical
+                childNode.layoutSizingVertical = 'FILL';
+            } else if (childStyles.alignSelf === 'stretch') {
+                childNode.layoutSizingVertical = 'FILL';
+            } else if (childStyles.height && childStyles.height > 0) {
+                childNode.layoutSizingVertical = 'FIXED';
+            } else {
+                childNode.layoutSizingVertical = 'HUG';
+            }
+        }
+    } catch {
+        // Some nodes don't support these layout properties
     }
 }
 
