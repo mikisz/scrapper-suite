@@ -184,7 +184,7 @@ export async function buildNode(
 
                 // Apply flex item properties
                 if (childNode && (s.display === 'flex' || s.display === 'inline-flex') && 'layoutGrow' in childNode) {
-                    applyFlexItemProperties(childNode as FrameNode, childData);
+                    applyFlexItemProperties(childNode as FrameNode, childData, s);
                 }
 
                 // Apply grid item sizing
@@ -686,8 +686,13 @@ function configureFrameLayout(frame: FrameNode, data: VisualNode, s: any): void 
     }
 }
 
-function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode): void {
+function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode, parentStyles: any): void {
     const childStyles = (childData.styles || childData) as any;
+
+    // Determine parent flex direction to apply sizing correctly
+    const isParentRow = parentStyles.flexDirection === 'row' ||
+                        parentStyles.flexDirection === 'row-reverse' ||
+                        !parentStyles.flexDirection;
 
     try {
         // Handle flex-grow - if > 0, the element should fill available space
@@ -711,11 +716,11 @@ function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode): v
             }
         }
 
-        // Set proper sizing mode for flex children
+        // Set proper sizing mode for flex children based on parent direction
         // This helps maintain the correct fill/hug behavior
         if ('layoutSizingHorizontal' in childNode) {
-            // If flex-grow is set, the element should fill in the main axis
-            if (childStyles.flexGrow && childStyles.flexGrow > 0) {
+            if (isParentRow && childStyles.flexGrow && childStyles.flexGrow > 0) {
+                // flex-grow in row direction fills horizontal
                 childNode.layoutSizingHorizontal = 'FILL';
             } else if (childStyles.width && childStyles.width > 0) {
                 childNode.layoutSizingHorizontal = 'FIXED';
@@ -725,7 +730,10 @@ function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode): v
         }
 
         if ('layoutSizingVertical' in childNode) {
-            if (childStyles.alignSelf === 'stretch') {
+            if (!isParentRow && childStyles.flexGrow && childStyles.flexGrow > 0) {
+                // flex-grow in column direction fills vertical
+                childNode.layoutSizingVertical = 'FILL';
+            } else if (childStyles.alignSelf === 'stretch') {
                 childNode.layoutSizingVertical = 'FILL';
             } else if (childStyles.height && childStyles.height > 0) {
                 childNode.layoutSizingVertical = 'FIXED';
