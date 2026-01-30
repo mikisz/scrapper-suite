@@ -132,7 +132,8 @@ export async function buildNode(
     }
 
     // --- 2. COMMON SIZE & POSITION ---
-    if (s.width && s.height && 'resize' in node) {
+    // Skip resizing for text nodes - they handle their own sizing via textAutoResize
+    if (s.width && s.height && 'resize' in node && node.type !== 'TEXT') {
         try {
             (node as FrameNode).resize(s.width, s.height);
         } catch {
@@ -178,7 +179,17 @@ export async function buildNode(
 
     // --- 4. RECURSION ---
     if (data.children) {
-        for (const childData of data.children) {
+        // Sort children by z-index for proper stacking order
+        // In Figma, later children appear on top, so sort ascending by z-index
+        const sortedChildren = [...data.children].sort((a: any, b: any) => {
+            const aStyles = a.styles || a;
+            const bStyles = b.styles || b;
+            const aZIndex = aStyles.zIndex || 0;
+            const bZIndex = bStyles.zIndex || 0;
+            return aZIndex - bZIndex;
+        });
+
+        for (const childData of sortedChildren) {
             try {
                 const childNode = await buildNode(childData, node, data);
 
@@ -190,6 +201,12 @@ export async function buildNode(
                 // Apply grid item sizing
                 if (childNode && s.display === 'grid' && (data as any)._gridInfo) {
                     applyGridItemSizing(childNode, childData, (data as any)._gridInfo);
+                }
+
+                // Apply block-level child sizing (for non-flex, non-grid containers)
+                // This handles width: 100% / full-width block elements
+                if (childNode && s.display !== 'flex' && s.display !== 'inline-flex' && s.display !== 'grid') {
+                    applyBlockChildSizing(childNode, childData);
                 }
             } catch (childErr) {
                 // Log but continue - don't let one child failure break the entire build
@@ -262,18 +279,21 @@ async function createVectorNode(data: VisualNode, s: any): Promise<SceneNode> {
         }
 
         // Apply fill color override for simple icons
-        if (data.svgFill && svgNode.children && svgNode.children.length <= 5) {
+        // Use svgFill if available, otherwise fall back to inheritedColor (for currentColor support)
+        const fillColor = data.svgFill || data.inheritedColor;
+        if (fillColor && svgNode.children && svgNode.children.length <= 10) {
             try {
-                const fillRgb = toRGB(data.svgFill);
+                const fillRgb = toRGB(fillColor);
                 if (fillRgb) {
                     for (const child of svgNode.findAll()) {
                         if ('fills' in child && (child as GeometryMixin).fills) {
                             const fills = (child as GeometryMixin).fills as readonly Paint[];
-                            if (fills.length > 0 && fills[0].type === 'SOLID') {
+                            // Apply to elements with solid fills or no fills (for currentColor paths)
+                            if (fills.length === 0 || (fills.length > 0 && fills[0].type === 'SOLID')) {
                                 (child as GeometryMixin).fills = [{
                                     type: 'SOLID',
                                     color: fillRgb,
-                                    opacity: data.svgFill.a ?? 1
+                                    opacity: fillColor.a ?? 1
                                 }];
                             }
                         }
@@ -482,12 +502,29 @@ async function createTextNode(data: VisualNode, s: any): Promise<TextNode> {
         } else if (s.boxShadow) {
             text.effects = parseBoxShadow(s.boxShadow);
         }
+
+        // Set text auto-resize behavior
+        // Most text in modern UIs should auto-size to content (WIDTH_AND_HEIGHT)
+        // Only use HEIGHT resize for truly constrained containers like multi-line paragraphs
+        // Check if the text is likely a paragraph (long text) vs a label/button (short text)
+        const isLongText = content.length > 100 || content.includes('\n');
+        const hasExplicitWidth = s.width && s.width > 0 && s.width < 2000; // Sanity check - ignore huge inherited widths
+
+        if (isLongText && hasExplicitWidth) {
+            // Long text in constrained container - text should wrap and grow vertically
+            text.textAutoResize = 'HEIGHT';
+            text.resize(s.width, text.height);
+        } else {
+            // Short text (labels, buttons, chips) - should grow to fit content naturally
+            text.textAutoResize = 'WIDTH_AND_HEIGHT';
+        }
     } catch (e) {
         console.warn('Text node creation failed:', e, 'Content:', data.content?.substring(0, 50));
         try {
             await figma.loadFontAsync(FALLBACK_FONT);
             text.fontName = FALLBACK_FONT;
             text.characters = data.content?.replace(/[^\x00-\x7F]/g, '?') || "?";
+            text.textAutoResize = 'WIDTH_AND_HEIGHT';
         } catch (fallbackErr) {
             console.warn('Fallback font load also failed:', fallbackErr);
         }
@@ -541,8 +578,13 @@ function createFrameNode(data: VisualNode, s: any): FrameNode {
         frame.effects = parseBoxShadow(s.boxShadow);
     }
 
-    // Borders
-    if (s.border && s.border.width > 0 && s.border.color) {
+    // Borders - check for both width > 0 AND valid border style (not 'none')
+    // Many chips/pills have 1px borders that should be visible
+    const hasBorder = s.border &&
+                      s.border.width > 0 &&
+                      s.border.color &&
+                      s.border.style !== 'none';
+    if (hasBorder) {
         const borderRgb = toRGB(s.border.color);
         if (borderRgb) {
             frame.strokes = [{ type: 'SOLID', color: borderRgb, opacity: s.border.color.a ?? 1 }];
@@ -551,8 +593,14 @@ function createFrameNode(data: VisualNode, s: any): FrameNode {
         }
     }
 
-    // Clipping
-    frame.clipsContent = s.overflowX === 'hidden' || s.overflowY === 'hidden';
+    // Clipping - disable for scrollable containers so full content is visible in Figma
+    // For scrollable containers, we've already expanded the dimensions to scrollHeight/scrollWidth
+    // so we don't want to clip the content
+    if (s.isScrollable) {
+        frame.clipsContent = false;
+    } else {
+        frame.clipsContent = s.overflowX === 'hidden' || s.overflowY === 'hidden';
+    }
 
     // Radius
     if (s.borderRadius) {
@@ -560,6 +608,31 @@ function createFrameNode(data: VisualNode, s: any): FrameNode {
         frame.topRightRadius = s.borderRadius.topRight || 0;
         frame.bottomRightRadius = s.borderRadius.bottomRight || 0;
         frame.bottomLeftRadius = s.borderRadius.bottomLeft || 0;
+    }
+
+    // Blend mode
+    if (s.mixBlendMode) {
+        const blendModeMap: Record<string, BlendMode> = {
+            'multiply': 'MULTIPLY',
+            'screen': 'SCREEN',
+            'overlay': 'OVERLAY',
+            'darken': 'DARKEN',
+            'lighten': 'LIGHTEN',
+            'color-dodge': 'COLOR_DODGE',
+            'color-burn': 'COLOR_BURN',
+            'hard-light': 'HARD_LIGHT',
+            'soft-light': 'SOFT_LIGHT',
+            'difference': 'DIFFERENCE',
+            'exclusion': 'EXCLUSION',
+            'hue': 'HUE',
+            'saturation': 'SATURATION',
+            'color': 'COLOR',
+            'luminosity': 'LUMINOSITY',
+        };
+        const figmaBlendMode = blendModeMap[s.mixBlendMode];
+        if (figmaBlendMode) {
+            frame.blendMode = figmaBlendMode;
+        }
     }
 
     return frame;
@@ -628,13 +701,22 @@ function configureFrameLayout(frame: FrameNode, data: VisualNode, s: any): void 
         const isRow = s.flexDirection === 'row' || s.flexDirection === 'row-reverse' || !s.flexDirection;
         frame.layoutMode = isRow ? 'HORIZONTAL' : 'VERTICAL';
 
-        if (s.flexWrap === 'wrap' || s.flexWrap === 'wrap-reverse') {
+        // Check if this flex container should wrap
+        // Enable wrap for: explicit flex-wrap, inline-flex containers (chips), or containers with many children
+        const shouldWrap = s.flexWrap === 'wrap' || s.flexWrap === 'wrap-reverse';
+        const isInlineFlexContainer = s.display === 'inline-flex';
+        const hasManyChildren = data.children && data.children.length > 3;
+
+        // For inline-flex containers that might be chips/tags, enable wrap to prevent overflow
+        if (shouldWrap || (isInlineFlexContainer && hasManyChildren)) {
             frame.layoutWrap = 'WRAP';
-            frame.counterAxisSpacing = s.rowGap || s.gap || 0;
+            frame.counterAxisSpacing = s.rowGap || s.gap || 8;
         }
 
         // For flex, use the appropriate gap based on direction
-        const mainAxisGap = isRow ? (s.columnGap || s.gap || 0) : (s.rowGap || s.gap || 0);
+        // Use a sensible default gap for inline-flex containers (chips/tags usually have gaps)
+        const defaultGap = isInlineFlexContainer ? 8 : 0;
+        const mainAxisGap = isRow ? (s.columnGap || s.gap || defaultGap) : (s.rowGap || s.gap || defaultGap);
         frame.itemSpacing = mainAxisGap;
         applyPadding();
 
@@ -652,12 +734,42 @@ function configureFrameLayout(frame: FrameNode, data: VisualNode, s: any): void 
             default: frame.primaryAxisAlignItems = 'MIN';
         }
     } else {
-        // Block/inline-block layout -> Vertical AutoLayout (stacking)
-        frame.layoutMode = 'VERTICAL';
-        applyPadding();
+        // Block/inline-block layout
+        // Check if children are mostly inline elements - if so, use HORIZONTAL wrap layout
+        // This handles chip containers, tag lists, navigation bars, etc.
+        const hasInlineChildren = data.children && data.children.some((child: any) => {
+            const childStyles = child.styles || child;
+            const display = childStyles.display;
+            return display === 'inline' ||
+                   display === 'inline-block' ||
+                   display === 'inline-flex' ||
+                   display === 'inline-grid';
+        });
 
-        // For block elements, children stack vertically with no gap by default
-        frame.itemSpacing = 0;
+        // Also check if this is a navigation/link container (anchor tags in a row)
+        const hasLinkChildren = data.children && data.children.filter((child: any) => {
+            return child.tag === 'a' || child.tag === 'button';
+        }).length >= 2;
+
+        // Check if children are all similar small elements (chips, tags, etc.)
+        const hasSmallSimilarChildren = data.children && data.children.length > 2 && data.children.every((child: any) => {
+            const childStyles = child.styles || child;
+            return childStyles.width && childStyles.width < 200 && childStyles.height && childStyles.height < 60;
+        });
+
+        if (hasInlineChildren || hasLinkChildren || hasSmallSimilarChildren) {
+            // Inline children should flow horizontally and wrap
+            frame.layoutMode = 'HORIZONTAL';
+            frame.layoutWrap = 'WRAP';
+            frame.itemSpacing = s.gap || 8; // Default gap for inline elements
+            frame.counterAxisSpacing = s.rowGap || s.gap || 8;
+        } else {
+            // True block layout - children stack vertically
+            frame.layoutMode = 'VERTICAL';
+            frame.itemSpacing = 0;
+        }
+
+        applyPadding();
         frame.counterAxisAlignItems = 'MIN';
         frame.primaryAxisAlignItems = 'MIN';
     }
@@ -722,6 +834,9 @@ function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode, pa
             if (isParentRow && childStyles.flexGrow && childStyles.flexGrow > 0) {
                 // flex-grow in row direction fills horizontal
                 childNode.layoutSizingHorizontal = 'FILL';
+            } else if (childStyles.isFullWidth) {
+                // Element was detected as full-width in the DOM (width: 100%, block element, etc.)
+                childNode.layoutSizingHorizontal = 'FILL';
             } else if (childStyles.width && childStyles.width > 0) {
                 childNode.layoutSizingHorizontal = 'FIXED';
             } else {
@@ -740,6 +855,30 @@ function applyFlexItemProperties(childNode: FrameNode, childData: VisualNode, pa
             } else {
                 childNode.layoutSizingVertical = 'HUG';
             }
+        }
+    } catch {
+        // Some nodes don't support these layout properties
+    }
+}
+
+function applyBlockChildSizing(childNode: SceneNode, childData: VisualNode): void {
+    const childStyles = (childData.styles || childData) as any;
+
+    // Only apply to frame-like nodes that support layout sizing
+    if (!('layoutSizingHorizontal' in childNode)) return;
+
+    try {
+        const frameNode = childNode as FrameNode;
+
+        // If the element was detected as full-width, set it to FILL
+        if (childStyles.isFullWidth) {
+            frameNode.layoutSizingHorizontal = 'FILL';
+        }
+
+        // For block-level elements, keep height as HUG unless explicitly set
+        // This allows the content to determine height naturally
+        if (!childStyles.height || childStyles.height === 0) {
+            frameNode.layoutSizingVertical = 'HUG';
         }
     } catch {
         // Some nodes don't support these layout properties

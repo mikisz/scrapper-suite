@@ -6,12 +6,21 @@ import sharp from 'sharp';
 
 export const dynamic = 'force-dynamic'; // Prevent static caching
 
-// Formats that Figma doesn't support natively
+// Formats that Figma doesn't support natively or may have issues with
+// Note: While Figma technically supports JPG/JPEG, some JPGs (progressive, CMYK, etc.)
+// can fail, so we convert everything to PNG for maximum compatibility
 const UNSUPPORTED_FORMATS = ['image/webp', 'image/avif', 'image/heic', 'image/heif'];
 
+// All image formats that should be converted to PNG for reliability
+// This ensures maximum compatibility with Figma's createImage API
+const SHOULD_CONVERT_TO_PNG = [
+    'image/webp', 'image/avif', 'image/heic', 'image/heif',
+    'image/jpeg', 'image/jpg', 'image/gif', 'image/bmp', 'image/tiff'
+];
+
 // Safety limits
-const FETCH_TIMEOUT_MS = 10000; // 10 seconds
-const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+const FETCH_TIMEOUT_MS = 20000; // 20 seconds (increased for large hero images)
+const MAX_IMAGE_SIZE_BYTES = 15 * 1024 * 1024; // 15MB (increased for hero images)
 
 export async function GET(request: NextRequest) {
     // Apply rate limiting (higher limit for proxy endpoint)
@@ -67,16 +76,29 @@ export async function GET(request: NextRequest) {
 
         let buffer: Buffer | Uint8Array = Buffer.from(arrayBuffer);
 
-        // Check if URL contains format hint (e.g., format=webp) or if content-type is unsupported
+        // Check if URL contains format hint or if content-type suggests conversion is needed
+        // We convert ALL non-PNG images to PNG for maximum Figma compatibility
         const urlLower = validatedUrl.toLowerCase();
-        const needsConversion =
-            UNSUPPORTED_FORMATS.includes(normalizedContentType) ||
+        const isPng = normalizedContentType === 'image/png' || urlLower.endsWith('.png');
+
+        // Convert everything except PNG to ensure maximum compatibility
+        // This handles: JPG issues (progressive, CMYK), WebP, AVIF, GIF, etc.
+        const needsConversion = !isPng && (
+            SHOULD_CONVERT_TO_PNG.includes(normalizedContentType) ||
             urlLower.includes('format=webp') ||
             urlLower.includes('format=avif') ||
             urlLower.endsWith('.webp') ||
             urlLower.endsWith('.avif') ||
             urlLower.endsWith('.heic') ||
-            urlLower.endsWith('.heif');
+            urlLower.endsWith('.heif') ||
+            urlLower.endsWith('.jpg') ||
+            urlLower.endsWith('.jpeg') ||
+            urlLower.endsWith('.gif') ||
+            urlLower.endsWith('.bmp') ||
+            // Also convert if content-type is generic or unknown (octet-stream often means image)
+            normalizedContentType === 'application/octet-stream' ||
+            normalizedContentType.startsWith('image/')
+        );
 
         if (needsConversion) {
             try {
